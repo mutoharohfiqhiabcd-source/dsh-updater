@@ -151,6 +151,20 @@ def fetch_official_versions() -> dict:
         out["npm"]["ok"] = bool(out["npm"]["version"])
     except Exception as e:  # noqa: BLE001
         out["npm"]["error"] = str(e)
+    # 官方近期提交（用于“更新了些什么”提示）
+    try:
+        commits = http_get_json(
+            f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/commits?per_page=6",
+            timeout=20,
+        )
+        out["github"]["recent"] = []
+        for c in commits:
+            cm = (c.get("commit") or {}).get("message") or ""
+            first = cm.splitlines()[0].strip()[:110] if cm else ""
+            date = ((c.get("commit") or {}).get("committer") or {}).get("date") or ""
+            out["github"]["recent"].append({"sha": str(c.get("sha", ""))[:8], "msg": first, "date": date[:10]})
+    except Exception:  # noqa: BLE001
+        out["github"]["recent"] = []
     return out
 
 
@@ -415,17 +429,34 @@ def detect_all() -> dict:
 # 目录大小
 # ---------------------------------------------------------------------------
 def dir_size(path: Path, skip_dirs: tuple = ()) -> int:
-    """递归统计目录字节数。skip_dirs 为相对名集合（遇到即跳过整个子树）。"""
+    """递归统计目录字节数。skip_dirs 为相对名集合（遇到即跳过整个子树）。
+    跳过符号链接与 junction（防循环、防重复统计 pnpm 软链）。"""
     total = 0
+    stack = [path]
     try:
-        for root, dirs, files in os.walk(path):
-            # 原地裁剪避免进入大目录
-            dirs[:] = [d for d in dirs if d not in skip_dirs and d != ".git"]
-            for f in files:
-                try:
-                    total += os.path.getsize(os.path.join(root, f))
-                except OSError:
-                    pass
+        while stack:
+            cur = stack.pop()
+            try:
+                with os.scandir(cur) as it:
+                    for entry in it:
+                        try:
+                            if entry.is_symlink():
+                                continue
+                            is_junction = getattr(entry, "is_junction", None)
+                            if is_junction is not None and is_junction():
+                                continue
+                            if entry.is_dir():
+                                if entry.name not in skip_dirs and entry.name != ".git":
+                                    stack.append(Path(entry.path))
+                            elif entry.is_file():
+                                try:
+                                    total += entry.stat().st_size
+                                except OSError:
+                                    pass
+                        except OSError:
+                            continue
+            except OSError:
+                continue
     except Exception:  # noqa: BLE001
         pass
     return total
@@ -531,11 +562,28 @@ def scan_plugins(include_core: bool = True, on_progress=None) -> dict:
     seen: set = set()
     profiles_root = DSH_HOME / "profiles"
     profiles = find_profiles()
-    search_roots = [profiles_root / "node_modules"]
+    # 收集所有候选 node_modules 根：DSH 运行时根、profile、npm 全局、DSH 检出
+    search_roots: list[Path] = []
+    # DSH 运行时根 node_modules（内置 dsh-base / dsh-web-app 等 bundle 所在）
+    if (profiles_root / "node_modules").is_dir():
+        search_roots.append(profiles_root / "node_modules")
     for d, *_ in profiles:
         nm = d / "node_modules"
         if nm.is_dir():
             search_roots.append(nm)
+    # npm 全局 node_modules（内置 dsh 包也会随 @deepseek-ai/dsh 装入）
+    try:
+        ng = _npm_root_global()
+        if ng:
+            search_roots.append(ng)
+    except Exception:  # noqa: BLE001
+        pass
+    # 源码检出中的 node_modules
+    for src, _, _ in find_source_checkouts():
+        nm = src / "node_modules"
+        if nm.is_dir():
+            search_roots.append(nm)
+    search_roots = list(dict.fromkeys(search_roots))  # 去重且保序
 
     # ---- 先统计总任务数，用于精确进度 ----
     task_names: list[tuple[str, str, str]] = []   # (kind, 名称/路径, profile名)
@@ -550,10 +598,12 @@ def scan_plugins(include_core: bool = True, on_progress=None) -> dict:
                 seen.add(name)
                 task_names.append(("enabled", name, Path(profile_dir).name))
     # 2) 运行时内置包
-    core_dirs: list[Path] = []
     if include_core:
-        core_root = profiles_root / "node_modules" / "@deepseek-ai"
-        if core_root.is_dir():
+        # 在所有候选根下找 @deepseek-ai 的 dsh-*/cordis 目录
+        for root in search_roots:
+            core_root = root / "@deepseek-ai"
+            if not core_root.is_dir():
+                continue
             try:
                 for c in sorted(core_root.iterdir()):
                     if c.is_dir() and (c.name.startswith("dsh-") or c.name.startswith("cordis")):
@@ -607,6 +657,11 @@ def scan_plugins(include_core: bool = True, on_progress=None) -> dict:
     elapsed = time.monotonic() - start
     # 按启用优先、名称排序，方便阅读
     items.sort(key=lambda x: (not x["enabled"], x["name"].lower()))
+    if not items and not errors:
+        errors.append(
+            "未找到任何插件：请检查 DSH 数据目录是否存在，或本机是否安装了运行时插件包。"
+            f"\n当前搜索位置：{DSH_HOME}"
+        )
     return {
         "items": items,
         "total_items": len(items),

@@ -20,6 +20,69 @@ import updater_core as core
 APP_TITLE = "DeepSeek Harness 自动检测与更新器"
 
 # ---------------------------------------------------------------------------
+# 主题色板（美工）
+# ---------------------------------------------------------------------------
+CLR = {
+    "bg": "#f2f5f9",
+    "panel": "#ffffff",
+    "panel_line": "#d7dee8",
+    "accent": "#0b57d0",
+    "accent_hover": "#0842a0",
+    "accent_fg": "#ffffff",
+    "text": "#1c2733",
+    "text_dim": "#5a6a7a",
+    "ok": "#1a7f37",
+    "warn": "#b35900",
+    "err": "#c5221f",
+    "heading_bg": "#dfe8f6",
+    "heading_fg": "#12315f",
+    "log_bg": "#0f1722",
+    "log_fg": "#d7e1ee",
+}
+
+# 各安装类型在此程序浮窗中的说明
+KIND_INFO = {
+    core.INSTALL_KIND_SOURCE: {
+        "badge": "源码检出",
+        "title": "源码检出 · Source Checkout",
+        "what": "DeepSeek Harness 的完整开源源码工程（package.json: @deepseek-ai/dsh-root）。"
+                "一般来自 git clone 或 GitHub 源码 zip 解压，包含 apps/cli 等全部源码。",
+        "role": "程序主体。可从该目录直接启动 DSH（如 tsx 运行 apps/cli/src/bin.ts 的 Web UI），"
+                "内置 dsh-* 插件包大多源自这里的 packages 工程。",
+        "how": "对比 GitHub master 源码；更新方式：下载官方源码 zip → 自动备份原目录 → 整目录替换"
+               "（node_modules/.git 会保留并移回，可勾选随后 pnpm install）。",
+        "ref": "GitHub master",
+    },
+    core.INSTALL_KIND_NPM: {
+        "badge": "npm 全局",
+        "title": "npm 全局安装 · @deepseek-ai/dsh",
+        "what": "通过 npm 全局安装的 dsh 命令行工具包（node_modules/@deepseek-ai/dsh）。",
+        "role": "提供 dsh 命令（CLI 入口）：初始化/管理 profile、运行 `dsh web` 启动 Web UI、"
+                "加载当前安装的运行时插件。",
+        "how": "对比 npm registry 的 latest 发布版；更新方式：npm install -g @deepseek-ai/dsh@latest。",
+        "ref": "npm latest",
+    },
+    core.INSTALL_KIND_PROFILE: {
+        "badge": "运行时 profile",
+        "title": "运行时 Profile · 插件装载实例",
+        "what": "DSH_HOME（默认 ~/.dsh/profiles/<name>）下的运行实例，以 pnpm workspace 形态管理"
+                "该 profile 启用的插件清单（package.json 的 dsh.profile.bundles）与本地配置。",
+        "role": "决定某次启动加载哪些插件（Web / ACP / SDK 等 profile 模板），是插件在“运行时”"
+                "层面的宿主目录，随 dsh CLI / 源码安装自动生成。",
+        "how": "本身不单独更新：升级其来源（npm 全局 dsh 或源码检出）后，重启 DSH 即用新版。",
+        "ref": "npm latest",
+    },
+}
+
+# Treeview 状态 tag → 颜色（可更新/已最新/其它）
+STATUS_TAG = {
+    "update": "#b35900",
+    "ok": "#1a7f37",
+    "err": "#c5221f",
+    "dim": "#5a6a7a",
+}
+
+# ---------------------------------------------------------------------------
 # 后台任务辅助：把耗时操作放进线程，日志经 queue 送回主线程
 # ---------------------------------------------------------------------------
 class Worker:
@@ -104,6 +167,7 @@ class UpdaterApp:
             except Exception:  # noqa: BLE001
                 pass
 
+        self._setup_style()
         self._build_ui()
         self._log(f"{APP_TITLE} 已启动。\nDSH 数据目录：{core.DSH_HOME}")
         self._log("正在自动检测本机安装与官方版本…")
@@ -118,75 +182,158 @@ class UpdaterApp:
         except Exception:  # noqa: BLE001
             pass
 
+    def _setup_style(self):
+        """统一美工：配色 / 字体 / 组件样式。"""
+        self.style = ttk.Style(self.root)
+        try:
+            self.style.theme_use("clam")
+        except Exception:  # noqa: BLE001
+            pass
+        s = self.style
+        s.configure(".", background=CLR["bg"], foreground=CLR["text"],
+                    font=("Microsoft YaHei UI", 10))
+        s.configure("TFrame", background=CLR["bg"])
+        s.configure("Panel.TFrame", background=CLR["panel"])
+        s.configure("TLabelframe", background=CLR["bg"], bordercolor=CLR["panel_line"],
+                    relief="flat", padding=6)
+        s.configure("TLabelframe.Label", background=CLR["bg"], foreground=CLR["heading_fg"],
+                    font=("Microsoft YaHei UI", 10, "bold"))
+        s.configure("TLabel", background=CLR["bg"])
+        s.configure("Panel.TLabel", background=CLR["panel"])
+        s.configure("Heading.TLabel", background=CLR["panel"], foreground=CLR["text"],
+                    font=("Microsoft YaHei UI", 16, "bold"))
+        s.configure("Dim.TLabel", background=CLR["panel"], foreground=CLR["text_dim"])
+
+        # 按钮
+        s.configure("TButton", background=CLR["panel"], foreground=CLR["text"],
+                    bordercolor=CLR["panel_line"], focusthickness=0, padding=(14, 6))
+        s.map("TButton", background=[("active", "#e6edf7"), ("pressed", "#d5e1f2")])
+        s.configure("Accent.TButton", background=CLR["accent"], foreground=CLR["accent_fg"],
+                    bordercolor=CLR["accent"], padding=(16, 7))
+        s.map("Accent.TButton",
+              background=[("active", CLR["accent_hover"]), ("pressed", CLR["accent_hover"]),
+                          ("disabled", "#9db8e2")],
+              foreground=[("disabled", "#eef2f9")])
+        s.configure("Warn.TButton", background="#e8710a", foreground="#ffffff",
+                    bordercolor="#e8710a", padding=(16, 7))
+        s.map("Warn.TButton", background=[("active", "#cf6407"), ("disabled", "#f0b98a")],
+              foreground=[("disabled", "#ffffff")])
+
+        # 进度条
+        s.configure("TProgressbar", background=CLR["accent"], troughcolor="#dfe6f0",
+                    bordercolor=CLR["bg"], lightcolor=CLR["accent"], darkcolor=CLR["accent"])
+
+        # Treeview
+        s.configure("Treeview", background="#ffffff", fieldbackground="#ffffff",
+                    foreground=CLR["text"], rowheight=30, bordercolor=CLR["panel_line"])
+        s.map("Treeview", background=[("selected", "#cfe0f7")],
+              foreground=[("selected", CLR["text"])])
+        s.configure("Treeview.Heading", background=CLR["heading_bg"],
+                    foreground=CLR["heading_fg"], padding=(8, 6),
+                    font=("Microsoft YaHei UI", 10, "bold"))
+        s.map("Treeview.Heading", background=[("active", "#cddbf0")])
+
+        # 滚动条
+        s.configure("Vertical.TScrollbar", background="#b9c6d6", troughcolor=CLR["bg"],
+                    bordercolor=CLR["bg"], arrowcolor="#5a6a7a")
+        s.configure("Horizontal.TScrollbar", background="#b9c6d6", troughcolor=CLR["bg"],
+                    bordercolor=CLR["bg"], arrowcolor="#5a6a7a")
+        s.configure("TCheckbutton", background=CLR["panel"], foreground=CLR["text"])
+
+        # 状态 tag 颜色（Treeview 行内使用）
+        for tag, col in STATUS_TAG.items():
+            self.tree_tags = getattr(self, "tree_tags", {})
+            self.tree_tags[tag] = col
+
     def _build_ui(self):
-        pad = {"padx": 10, "pady": 4}
+        self.root.configure(bg=CLR["bg"])
 
-        # ── 顶部：标题与官方版本条 ──
-        top = ttk.Frame(self.root)
-        top.pack(fill="x", padx=10, pady=(10, 2))
-        ttk.Label(top, text="DeepSeek Harness", font=("Microsoft YaHei UI", 16, "bold")).pack(side="left")
-        ttk.Label(top, text="自动检测 · 版本对比 · 插件/技能扫描 · 一键更新",
-                  foreground="#555").pack(side="left", padx=12)
-
-        self.lbl_github = ttk.Label(top, text="官方 GitHub：检测中…", foreground="#0a58ca")
-        self.lbl_github.pack(side="right", padx=6)
-        self.lbl_npm = ttk.Label(top, text="npm：检测中…", foreground="#7a4a0b")
-        self.lbl_npm.pack(side="right")
+        # ── 顶部横幅：标题与官方版本条 ──
+        top = ttk.Frame(self.root, style="Panel.TFrame")
+        top.pack(fill="x", padx=10, pady=(10, 4))
+        # 左侧标题区
+        titlebox = ttk.Frame(top, style="Panel.TFrame")
+        titlebox.pack(side="left", padx=12, pady=8)
+        ttk.Label(titlebox, text="DeepSeek Harness 更新器",
+                  style="Heading.TLabel").pack(anchor="w")
+        ttk.Label(titlebox, text="自动检测本机安装 · 对比官方版本 · 插件/技能扫描 · 一键更新",
+                  style="Dim.TLabel").pack(anchor="w", pady=(2, 0))
+        # 右侧版本条（白底卡片）
+        verbox = ttk.Frame(top, style="Panel.TFrame")
+        verbox.pack(side="right", padx=12, pady=8)
+        self.lbl_github = ttk.Label(verbox, text="🌐 官方 GitHub master：检测中…",
+                                    foreground=CLR["accent"], background=CLR["panel"])
+        self.lbl_github.pack(anchor="e")
+        self.lbl_npm = ttk.Label(verbox, text="📦 npm 发布版：检测中…",
+                                 foreground="#7a4a0b", background=CLR["panel"])
+        self.lbl_npm.pack(anchor="e", pady=(2, 0))
 
         # ── 中部：安装列表 ──
-        mid = ttk.LabelFrame(self.root, text="本机检测到的 DeepSeek Harness 安装")
+        mid = ttk.LabelFrame(self.root, text="本机检测到的 DeepSeek Harness 安装（悬停“类型”列查看说明）")
         mid.pack(fill="both", expand=False, padx=10, pady=6)
         cols = ("kind", "path", "version", "ref", "status")
         heads = {"kind": "类型", "path": "位置", "version": "当前版本",
                  "ref": "官方参考版本", "status": "状态"}
-        self.tree = ttk.Treeview(mid, columns=cols, show="headings", height=7)
+        self.tree = ttk.Treeview(mid, columns=cols, show="headings", height=6)
         for c in cols:
             self.tree.heading(c, text=heads[c])
-        widths = {"kind": 130, "path": 430, "version": 120, "ref": 130, "status": 110}
+        widths = {"kind": 128, "path": 430, "version": 122, "ref": 130, "status": 110}
         for c in cols:
             self.tree.column(c, width=widths[c], anchor="w")
         vsb = ttk.Scrollbar(mid, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=vsb.set)
         self.tree.pack(side="left", fill="both", expand=True, padx=(6, 0), pady=6)
         vsb.pack(side="right", fill="y", padx=(0, 6), pady=6)
+        # 状态 tag
+        for tag, col in STATUS_TAG.items():
+            self.tree.tag_configure(tag, foreground=col)
         self.tree.bind("<Double-1>", self._on_row_double)
+        # hover 浮窗（“类型”列 / 状态列均有说明）
+        self.tree.bind("<Motion>", self._on_tree_motion)
+        self.tree.bind("<Leave>", lambda e: self._hide_tip())
+        self._tip_win = None
 
         # ── 操作按钮区 ──
         btns = ttk.Frame(self.root)
-        btns.pack(fill="x", padx=10, pady=4)
+        btns.pack(fill="x", padx=10, pady=(6, 2))
+        self.btn_update = ttk.Button(btns, text="⬇ 更新所选安装", style="Accent.TButton",
+                                     command=self.update_selected)
+        self.btn_update.pack(side="left", padx=(0, 8))
+        self.btn_plugins = ttk.Button(btns, text="🧩 插件检测", command=self.open_plugins)
+        self.btn_plugins.pack(side="left", padx=(0, 8))
+        self.btn_skills = ttk.Button(btns, text="📚 技能检测", command=self.open_skills)
+        self.btn_skills.pack(side="left", padx=(0, 8))
         self.btn_refresh = ttk.Button(btns, text="🔄 重新检测", command=self.refresh_all)
         self.btn_refresh.pack(side="left")
-        self.btn_update = ttk.Button(btns, text="⬇ 更新所选安装", command=self.update_selected)
-        self.btn_update.pack(side="left", padx=8)
-        self.btn_plugins = ttk.Button(btns, text="🧩 插件检测", command=self.open_plugins)
-        self.btn_plugins.pack(side="left", padx=(8, 0))
-        self.btn_skills = ttk.Button(btns, text="📚 技能检测", command=self.open_skills)
-        self.btn_skills.pack(side="left", padx=8)
-        self.btn_export = ttk.Button(btns, text="💾 导出插件/技能 CSV", command=self.export_csv)
-        self.btn_export.pack(side="right")
         self.btn_settings = ttk.Button(btns, text="⚙ 数据目录", command=self.show_settings)
-        self.btn_settings.pack(side="right", padx=8)
+        self.btn_settings.pack(side="right", padx=(8, 0))
+        self.btn_export = ttk.Button(btns, text="💾 导出 CSV", command=self.export_csv)
+        self.btn_export.pack(side="right")
 
         # ── 当前操作进度横幅（扫描/下载/更新通用） ──
-        progframe = ttk.Frame(self.root)
-        progframe.pack(fill="x", padx=10, pady=(2, 0))
-        self.prog = ttk.Progressbar(progframe, mode="determinate", maximum=1000)
+        progframe = ttk.LabelFrame(self.root, text="当前任务")
+        progframe.pack(fill="x", padx=10, pady=4)
+        inner = ttk.Frame(progframe)
+        inner.pack(fill="x", padx=6, pady=6)
+        self.prog = ttk.Progressbar(inner, mode="determinate", maximum=1000)
         self.prog.pack(side="left", fill="x", expand=True)
-        self.lbl_progress = ttk.Label(progframe, text="等待任务…", width=58, anchor="e")
-        self.lbl_progress.pack(side="right", padx=(8, 0))
+        self.lbl_progress = ttk.Label(inner, text="等待任务…", width=60, anchor="e")
+        self.lbl_progress.pack(side="right", padx=(10, 0))
 
         # ── 日志区 ──
         logframe = ttk.LabelFrame(self.root, text="日志 / 进度")
         logframe.pack(fill="both", expand=True, padx=10, pady=6)
-        self.txt = tk.Text(logframe, height=10, wrap="word", state="disabled",
-                           font=("Consolas", 9), background="#111318", foreground="#d8dee9")
+        self.txt = tk.Text(logframe, height=9, wrap="word", state="disabled",
+                           font=("Consolas", 9), background=CLR["log_bg"],
+                           foreground=CLR["log_fg"], borderwidth=0, padx=8, pady=6)
         logvsb = ttk.Scrollbar(logframe, orient="vertical", command=self.txt.yview)
         self.txt.configure(yscrollcommand=logvsb.set)
         self.txt.pack(side="left", fill="both", expand=True, padx=(6, 0), pady=6)
         logvsb.pack(side="right", fill="y", padx=(0, 6), pady=6)
 
         # 底部状态栏
-        self.status = ttk.Label(self.root, text="就绪", relief="sunken", anchor="w")
+        self.status = ttk.Label(self.root, text="就绪", relief="flat", anchor="w",
+                                background="#e4ebf5", padding=(10, 5))
         self.status.pack(fill="x", side="bottom")
 
     # ---------------- 日志 ----------------
@@ -266,7 +413,8 @@ class UpdaterApp:
             ref = gh.get("version") or "" if inst["kind"] == core.INSTALL_KIND_SOURCE else (npm.get("version") or "")
             row = (inst["kind_label"], inst["path"], inst["version"] or "—",
                    ref or "—", inst.get("status", "—"))
-            iid = self.tree.insert("", "end", values=row)
+            tag = self._status_tag(inst.get("status", ""))
+            iid = self.tree.insert("", "end", values=row, tags=(tag,))
             self.install_rows.append({"iid": iid, "data": inst})
             self._log(
                 f"[{inst['kind_label']}] {inst['path']}\n"
@@ -275,6 +423,16 @@ class UpdaterApp:
         self._set_status(f"检测完成：发现 {len(result['installs'])} 处安装")
         if not result["installs"]:
             self._log("未自动发现安装，可使用界面按钮或自行检查路径。")
+
+    @staticmethod
+    def _status_tag(status: str) -> str:
+        if "可更新" in status:
+            return "update"
+        if status == "已是最新":
+            return "ok"
+        if status and "失败" in status:
+            return "err"
+        return "dim"
 
     # ---------------- 更新 ----------------
     def _selected_install(self):
@@ -418,13 +576,14 @@ class UpdaterApp:
         self._open_inventory_window(
             name="插件",
             title="🧩 DeepSeek Harness 插件检测",
+            reopen=self.open_plugins,
             columns=(("name", "名称"), ("version", "版本"), ("size", "大小"),
                      ("enabled", "启用"), ("source", "来源")),
-            widths=(340, 110, 100, 60, 130),
+            widths=(330, 110, 96, 58, 150),
             scan_fn=core.scan_plugins,
             scan_kwargs={},
             row_of=lambda it: (it["name"], it["version"] or "—", it["size_text"],
-                               "✔" if it["enabled"] else "—", it["source"]),
+                               "✔ 启用" if it["enabled"] else "内置", it["source"]),
             detail_of=lambda it: it["path"],
         )
 
@@ -432,31 +591,43 @@ class UpdaterApp:
         self._open_inventory_window(
             name="技能",
             title="📚 DeepSeek Harness 技能检测",
+            reopen=self.open_skills,
             columns=(("name", "名称"), ("version", "版本"), ("size", "大小")),
-            widths=(330, 110, 110),
+            widths=(330, 120, 120),
             scan_fn=core.scan_skills,
             scan_kwargs={},
             row_of=lambda it: (it["name"], it["version"] or "—", it["size_text"]),
             detail_of=lambda it: it["path"],
         )
 
-    def _open_inventory_window(self, name, title, columns, widths, scan_fn, scan_kwargs,
-                               row_of, detail_of):
+    def _open_inventory_window(self, name, title, reopen, columns, widths,
+                               scan_fn, scan_kwargs, row_of, detail_of):
         win = tk.Toplevel(self.root)
         win.title(title)
-        win.geometry("920x600")
+        win.geometry("940x620")
         self._apply_icon(win)
         win.transient(self.root)
+        win.configure(bg=CLR["bg"])
 
         # ── 顶部：标题 + 进度条 + 效率标签 ──
         head = ttk.Frame(win)
-        head.pack(fill="x", padx=10, pady=(8, 0))
-        lbl = ttk.Label(head, text="正在扫描…", foreground="#0a58ca")
-        lbl.pack(anchor="w")
+        head.pack(fill="x", padx=10, pady=(10, 0))
+        toprow = ttk.Frame(head)
+        toprow.pack(fill="x")
+        lbl = ttk.Label(toprow, text="正在扫描…", foreground=CLR["accent"],
+                        font=("Microsoft YaHei UI", 10, "bold"))
+        lbl.pack(side="left")
+        btn_rescan = ttk.Button(toprow, text="↻ 重新扫描", command=lambda: self._rescan(win, reopen))
+        btn_rescan.pack(side="right")
         bar = ttk.Progressbar(head, mode="determinate", maximum=1000)
-        bar.pack(fill="x", pady=(4, 2))
-        lbl_prog = ttk.Label(head, text="", foreground="#333")
+        bar.pack(fill="x", pady=(6, 2))
+        lbl_prog = ttk.Label(head, text="", foreground=CLR["text_dim"])
         lbl_prog.pack(anchor="w")
+
+        # ── 结果 / 错误横幅 ──
+        banner = tk.Label(win, text="", anchor="w", justify="left", wraplength=900,
+                          font=("Microsoft YaHei UI", 9), padx=12, pady=8)
+        banner.pack(fill="x", padx=10, pady=(6, 0))
 
         frm = ttk.Frame(win)
         frm.pack(fill="both", expand=True, padx=10, pady=6)
@@ -476,10 +647,19 @@ class UpdaterApp:
         tree._item_map: dict = {}  # type: ignore[attr-defined]
         tree.bind("<Double-1>", lambda e: self._open_row(tree, detail_of))
 
-        status = ttk.Label(win, text="", relief="sunken", anchor="w")
+        status = ttk.Label(win, text="", relief="flat", anchor="w",
+                           background="#e4ebf5", padding=(10, 5))
         status.pack(fill="x", side="bottom")
 
         state = {"last_log_pct": -1}
+
+        def show_banner(text: str, kind: str = "ok"):
+            color = {"ok": CLR["ok"], "warn": CLR["warn"], "err": CLR["err"]}[kind]
+            banner.configure(text=text, fg=color,
+                             bg={"ok": "#eef7f0", "warn": "#fff4e6",
+                                 "err": "#fdeeec"}[kind])
+            if not text:
+                banner.configure(text="", bg=CLR["bg"])
 
         def on_progress(rep: dict):
             """rep: {phase,done,total,current,elapsed} —— 每处理完一项回调。"""
@@ -534,8 +714,6 @@ class UpdaterApp:
                 lbl.configure(text=f"扫描目录：{root}")
             else:
                 lbl.configure(text="扫描完成")
-            if errs:
-                lbl.configure(text=(lbl.cget("text") + "    ⚠ 部分项解析失败，见列表空白行"))
             total_size = sum(it.get("size", 0) for it in items)
             eff = f"共 {len(items)} 项    合计 {core.human_size(total_size)}"
             if elapsed:
@@ -544,6 +722,19 @@ class UpdaterApp:
                 eff += f"    平均 {speed:.1f} 项/秒"
             eff += "    双击行可打开所在路径"
             status.configure(text=eff)
+
+            # 空态 / 错误诊断横幅
+            if errs:
+                show_banner("⚠ " + "；".join(str(e) for e in errs[:3])
+                            + ("…" if len(errs) > 3 else ""), kind="err")
+            elif not items:
+                show_banner(f"未检测到任何{name}。\n"
+                            f"扫描目录：{root or '（未指定）'}\n"
+                            f"请确认 DSH 数据目录（DSH_HOME={core.DSH_HOME}）正确，"
+                            f"或点击「↻ 重新扫描」重试。", kind="warn")
+            else:
+                show_banner(f"✅ 检测成功：共 {len(items)} 项，合计 {core.human_size(total_size)}，"
+                            f"用时 {elapsed:.2f} 秒（平均 {speed:.1f} 项/秒）")
             self._log(f"✅ [{name}检测] 完成：{len(items)} 项，合计 {core.human_size(total_size)}，"
                       f"用时 {elapsed:.2f}s（{speed:.1f} 项/秒）")
 
@@ -559,6 +750,13 @@ class UpdaterApp:
 
         worker.start(scan)
         win.after(120, lambda: self._poll_window(worker, win))
+
+    def _rescan(self, win: tk.Toplevel, reopen):
+        try:
+            win.destroy()
+        except tk.TclError:
+            pass
+        reopen()
 
     def _poll_window(self, worker: Worker, win: tk.Toplevel):
         try:
@@ -633,6 +831,120 @@ class UpdaterApp:
         inst = self._selected_install()
         if inst:
             self._try_open(inst["path"])
+
+    # ---------------- 类型/状态列 hover 浮窗 ----------------
+    def _row_at(self, x, y):
+        """返回 (install_dict, column_id) 或 (None, None)。"""
+        iid = self.tree.identify_row(y)
+        if not iid:
+            return None, None
+        col = self.tree.identify_column(x)
+        for r in self.install_rows:
+            if r["iid"] == iid:
+                return r["data"], col
+        return None, None
+
+    def _on_tree_motion(self, event):
+        try:
+            inst, col = self._row_at(event.x, event.y)
+            if inst is None:
+                self._hide_tip()
+                return
+            if col == "#1":  # 类型列
+                text = self._kind_tip_text(inst)
+                self._show_tip(event, text, width=460)
+            elif col == "#5":  # 状态列
+                text = self._status_tip_text(inst)
+                self._show_tip(event, text, width=300)
+            else:
+                self._hide_tip()
+        except tk.TclError:
+            self._hide_tip()
+
+    def _kind_tip_text(self, inst: dict) -> str:
+        kind = inst["kind"]
+        info = KIND_INFO.get(kind)
+        if not info:
+            return "未知类型。"
+        gh = (self.official or {}).get("github", {})
+        npm = (self.official or {}).get("npm", {})
+        local = inst.get("version") or "—"
+        if kind == core.INSTALL_KIND_SOURCE:
+            ref = gh.get("version") or "获取失败"
+            need = inst.get("status") == "可更新"
+        else:
+            ref = npm.get("version") or "获取失败"
+            need = inst.get("status") in ("可更新", "可更新(npm)")
+        recent = gh.get("recent") or []
+        lines = [
+            f"【{info['title']}】",
+            "",
+            f"◉ 这是什么：{info['what']}",
+            "",
+            f"◉ 在 DSH 中作用：{info['role']}",
+            "",
+            f"◉ 版本：本地 {local}   ∥   官方({info['ref']}) {ref}",
+            f"◉ 是否需要立即更新：{'是，有可用更新' if need else '否，已是最新'}",
+            "",
+            f"◉ 更新方式：{info['how']}",
+        ]
+        if need and recent:
+            lines.append("")
+            lines.append("◉ 官方近期更新内容（最近若干提交，可作更新预期参考）：")
+            for c in recent[:4]:
+                lines.append(f"   · {c.get('date', '')}  {c.get('msg', '')}")
+        lines.append("")
+        lines.append("（提示：更新前请先退出正在运行的 DeepSeek Harness）")
+        return "\n".join(lines)
+
+    def _status_tip_text(self, inst: dict) -> str:
+        status = inst.get("status", "—")
+        ver = inst.get("version") or "—"
+        if status == "可更新":
+            return (f"当前版本 {ver} 落后于官方，可点击\n"
+                    f"「⬇ 更新所选安装」一键升级（自动备份后替换）。")
+        if status == "已是最新":
+            return f"当前版本 {ver} 与官方一致，无需更新。"
+        return f"状态：{status}\n（版本信息：{ver}）"
+
+    def _show_tip(self, event, text: str, width: int = 460):
+        if self._tip_win is not None:
+            try:
+                self._tip_win.destroy()
+            except tk.TclError:
+                pass
+            self._tip_win = None
+        if not text:
+            return
+        win = tk.Toplevel(self.root)
+        win.overrideredirect(True)
+        win.attributes("-topmost", True)
+        win.configure(bg="#2b3441")
+        lab = tk.Label(
+            win, text=text, justify="left", anchor="nw", wraplength=width,
+            bg="#ffffff", fg="#22303f", font=("Microsoft YaHei UI", 9),
+            padx=12, pady=10, bd=0,
+        )
+        lab.pack()
+        # 位置：尽量贴合鼠标，避免超出屏幕
+        x = event.x_root + 16
+        y = event.y_root + 14
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        if x + width > sw - 8:
+            x = event.x_root - width - 10
+        if y + 320 > sh - 8:
+            y = event.y_root - 320
+        win.geometry(f"+{int(x)}+{int(y)}")
+        self._tip_win = win
+
+    def _hide_tip(self):
+        if self._tip_win is not None:
+            try:
+                self._tip_win.destroy()
+            except tk.TclError:
+                pass
+            self._tip_win = None
 
 
 # ---------------------------------------------------------------------------
