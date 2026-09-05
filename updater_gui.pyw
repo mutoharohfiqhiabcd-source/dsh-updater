@@ -668,8 +668,12 @@ class UpdaterApp:
                 total = rep.get("total", 0) or 1
                 elapsed = rep.get("elapsed", 0.0)
                 current = rep.get("current", "") or ""
+                finished = rep.get("finished", False)
                 pct = done / total
-                bar.configure(value=int(pct * 1000))
+                try:
+                    bar.configure(value=int(pct * 1000))
+                except tk.TclError:
+                    pass
                 speed = (done / elapsed) if elapsed > 0.05 else float("nan")
                 if speed == speed:  # 非 NaN
                     remain = (total - done) / speed if speed > 0 else 0.0
@@ -677,20 +681,47 @@ class UpdaterApp:
                     eta_txt = core._fmt_eta(remain) if remain > 0 else "即将完成"
                 else:
                     speed_txt, eta_txt = "计算中…", "计算中…"
-                lbl_prog.configure(
-                    text=f"已检测 {done}/{total} 项（{pct * 100:.1f}%）｜当前：{current or '—'}"
-                         f"｜{speed_txt}｜已用 {elapsed:.1f} 秒｜预计还需 {eta_txt}"
-                )
+                try:
+                    lbl_prog.configure(
+                        text=f"已检测 {done}/{total} 项（{pct * 100:.1f}%）｜当前：{current or '—'}"
+                             f"｜{speed_txt}｜已用 {elapsed:.1f} 秒｜预计还需 {eta_txt}"
+                    )
+                except tk.TclError:
+                    pass
                 # 主窗口日志按 10% 一档汇报（避免刷屏）
                 mark = int(pct * 100 / 10)
-                if mark > state["last_log_pct"]:
+                if not finished and mark > state["last_log_pct"]:
                     state["last_log_pct"] = mark
-                    self._log(f"📊 [{name}检测] 进度 {pct * 100:.0f}%"
-                              f"（{done}/{total}）｜{speed_txt}｜已用 {elapsed:.1f}s")
-            except tk.TclError:
-                pass  # 窗口已关闭
+                    try:
+                        self._log(f"📊 [{name}检测] 进度 {pct * 100:.0f}%"
+                                  f"（{done}/{total}）｜{speed_txt}｜已用 {elapsed:.1f}s")
+                    except Exception:  # noqa: BLE001
+                        pass
+            except Exception as e:  # noqa: BLE001 —— 兜底：不允许进度回调打断窗口
+                try:
+                    banner.configure(text=f"进度刷新异常（扫描继续）：{e}",
+                                     fg=CLR["err"], bg="#fdeeec")
+                except tk.TclError:
+                    pass
 
-        def fill(result):
+        def fill(result, err=None):
+            if err is not None:
+                # 扫描线程异常：让窗口脱离“正在扫描”并显示原因
+                try:
+                    bar.configure(value=1000)
+                    lbl.configure(text="扫描出错")
+                    lbl_prog.configure(text="✖ 扫描异常")
+                    show_banner(f"扫描失败：{err}\n请点击「↻ 重新扫描」重试，"
+                                f"或检查 DSH 数据目录（DSH_HOME={core.DSH_HOME}）。",
+                                kind="err")
+                    status.configure(text="扫描异常 — 未获得结果")
+                except tk.TclError:
+                    return
+                try:
+                    self._log(f"✖ [{name}检测] 扫描失败：{err}")
+                except Exception:  # noqa: BLE001
+                    pass
+                return
             try:
                 bar.configure(value=1000)
                 # 保留进度条显示 100%，仅更新标签
@@ -705,9 +736,17 @@ class UpdaterApp:
             except tk.TclError:
                 return  # 窗口已被关闭
             items = result.get("items", [])
-            for it in items:
-                iid = tree.insert("", "end", values=row_of(it))
-                tree._item_map[iid] = it  # type: ignore[attr-defined]
+            try:
+                for it in items:
+                    iid = tree.insert("", "end", values=row_of(it))
+                    tree._item_map[iid] = it  # type: ignore[attr-defined]
+            except Exception as e:  # noqa: BLE001 —— 兜底：不让填表异常卡死窗口
+                try:
+                    lbl.configure(text="填表时遇到异常，已显示部分结果")
+                    banner.configure(text=f"⚠ 列表渲染异常：{e}",
+                                     fg=CLR["err"], bg="#fdeeec")
+                except tk.TclError:
+                    return
             root = result.get("root")
             errs = result.get("errors") or []
             if root:
@@ -764,6 +803,11 @@ class UpdaterApp:
                 return
         except tk.TclError:
             return  # 窗口已关闭
+        except Exception as e:  # noqa: BLE001 —— 兜底：显示错误且继续轮询，杜绝“卡在正在扫描”
+            try:
+                self._log(f"⚠ 扫描轮询异常（继续等待）：{e}")
+            except Exception:  # noqa: BLE001
+                pass
         try:
             win.after(120, lambda: self._poll_window(worker, win))
         except tk.TclError:

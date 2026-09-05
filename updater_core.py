@@ -428,10 +428,14 @@ def detect_all() -> dict:
 # ---------------------------------------------------------------------------
 # 目录大小
 # ---------------------------------------------------------------------------
-def dir_size(path: Path, skip_dirs: tuple = ()) -> int:
+def dir_size(path: Path, skip_dirs: tuple = (), limit_files: int | None = None,
+             limit_seconds: float | None = None) -> int:
     """递归统计目录字节数。skip_dirs 为相对名集合（遇到即跳过整个子树）。
-    跳过符号链接与 junction（防循环、防重复统计 pnpm 软链）。"""
+    跳过符号链接与 junction（防循环、防重复统计 pnpm 软链）。
+    limit_files / limit_seconds：软上限，超过即返回已统计值（防超大目录拖死扫描）。"""
     total = 0
+    files = 0
+    t0 = time.monotonic()
     stack = [path]
     try:
         while stack:
@@ -439,6 +443,10 @@ def dir_size(path: Path, skip_dirs: tuple = ()) -> int:
             try:
                 with os.scandir(cur) as it:
                     for entry in it:
+                        if limit_files is not None and files >= limit_files:
+                            return total
+                        if limit_seconds is not None and time.monotonic() - t0 >= limit_seconds:
+                            return total
                         try:
                             if entry.is_symlink():
                                 continue
@@ -451,6 +459,7 @@ def dir_size(path: Path, skip_dirs: tuple = ()) -> int:
                             elif entry.is_file():
                                 try:
                                     total += entry.stat().st_size
+                                    files += 1
                                 except OSError:
                                     pass
                         except OSError:
@@ -476,7 +485,12 @@ def human_size(n: int) -> str:
 # 插件检测
 # ---------------------------------------------------------------------------
 class ProgressReporter:
-    """扫描/下载/解压共用的进度上报器：按项推进并携带已用时间与阶段名。"""
+    """扫描/下载/解压共用的进度上报器：按项推进并携带已用时间与阶段名。
+
+    - announce(name)：处理某大目录*前*先广播“正在处理 X”（不计数），
+      这样即使单目录统计较慢，UI 进度也不会静止。
+    - step(name)：该目录处理完成后 done+1 并广播。
+    """
 
     def __init__(self, cb, total: int, phase: str, start_done: int = 0):
         self.cb = cb
@@ -484,38 +498,41 @@ class ProgressReporter:
         self.done = start_done
         self.phase = phase
         self.start = time.monotonic()
+        self._last_emit = 0.0
+
+    def _emit(self, current: str = "", finished: bool = False):
+        if not self.cb:
+            return
+        now = time.monotonic()
+        # 节流：相邻两次广播至少间隔 60ms，避免 UI 队列被刷爆
+        if not finished and now - self._last_emit < 0.06:
+            return
+        self._last_emit = now
+        try:
+            self.cb(
+                {
+                    "phase": self.phase,
+                    "done": self.done,
+                    "total": self.total,
+                    "current": current,
+                    "elapsed": now - self.start,
+                    "finished": finished,
+                }
+            )
+        except Exception:  # noqa: BLE001  （GUI 回调不应拖垮扫描）
+            pass
+
+    def announce(self, current: str = ""):
+        """开始处理一项前调用：广播“正在处理 current”，不计入 done。"""
+        self._emit(current)
 
     def step(self, current: str = ""):
+        """完成一项后调用：done+1 并广播。"""
         self.done += 1
-        if self.cb:
-            try:
-                self.cb(
-                    {
-                        "phase": self.phase,
-                        "done": self.done,
-                        "total": self.total,
-                        "current": current,
-                        "elapsed": time.monotonic() - self.start,
-                    }
-                )
-            except Exception:  # noqa: BLE001  （GUI 回调不应拖垮扫描）
-                pass
+        self._emit(current)
 
     def finish(self):
-        if self.cb:
-            try:
-                self.cb(
-                    {
-                        "phase": self.phase,
-                        "done": self.total,
-                        "total": self.total,
-                        "current": "",
-                        "elapsed": time.monotonic() - self.start,
-                        "finished": True,
-                    }
-                )
-            except Exception:  # noqa: BLE001
-                pass
+        self._emit("", finished=True)
 
 
 def _find_package_dir(name: str, search_roots: list) -> Path | None:
@@ -562,7 +579,9 @@ def scan_plugins(include_core: bool = True, on_progress=None) -> dict:
     seen: set = set()
     profiles_root = DSH_HOME / "profiles"
     profiles = find_profiles()
-    # 收集所有候选 node_modules 根：DSH 运行时根、profile、npm 全局、DSH 检出
+    # 收集候选 node_modules 根：仅基于已知且“必定存在”的位置，避免全盘搜索拖慢扫描：
+    #  DSH 运行时根、各 profile、npm 全局。源码检出 node_modules 不作为默认来源
+    #  （它内容与 profile/运行时根重复，且全盘发现源码检出开销大）。
     search_roots: list[Path] = []
     # DSH 运行时根 node_modules（内置 dsh-base / dsh-web-app 等 bundle 所在）
     if (profiles_root / "node_modules").is_dir():
@@ -574,15 +593,10 @@ def scan_plugins(include_core: bool = True, on_progress=None) -> dict:
     # npm 全局 node_modules（内置 dsh 包也会随 @deepseek-ai/dsh 装入）
     try:
         ng = _npm_root_global()
-        if ng:
+        if ng and ng not in search_roots:
             search_roots.append(ng)
     except Exception:  # noqa: BLE001
         pass
-    # 源码检出中的 node_modules
-    for src, _, _ in find_source_checkouts():
-        nm = src / "node_modules"
-        if nm.is_dir():
-            search_roots.append(nm)
     search_roots = list(dict.fromkeys(search_roots))  # 去重且保序
 
     # ---- 先统计总任务数，用于精确进度 ----
@@ -615,9 +629,12 @@ def scan_plugins(include_core: bool = True, on_progress=None) -> dict:
                 pass
 
     rep = ProgressReporter(on_progress, len(task_names), "plugins")
+    # 任务还没开始前就广播一条，让 UI 进度条立刻“活”起来
+    rep.announce("准备就绪，开始枚举插件目录…" if not task_names else "")
 
     for kind, name, profile_name in task_names:
         if kind == "enabled":
+            rep.announce(f"解析启用插件 {name}")
             pkg_dir = _find_package_dir(name, search_roots)
             if pkg_dir is None:
                 errors.append(f"无法解析已启用插件 {name}（未在 node_modules 找到）")
@@ -625,7 +642,8 @@ def scan_plugins(include_core: bool = True, on_progress=None) -> dict:
                 continue
             data = _read_package_json(pkg_dir)
             ver = data.get("version") or ""
-            size = dir_size(pkg_dir, skip_dirs=("node_modules", ".git", ".pnpm"))
+            size = dir_size(pkg_dir, skip_dirs=("node_modules", ".git", ".pnpm"),
+                            limit_files=200_000, limit_seconds=5.0)
             items.append(
                 {
                     "name": name,
@@ -639,9 +657,11 @@ def scan_plugins(include_core: bool = True, on_progress=None) -> dict:
             )
         else:  # core
             c = Path(name)
+            rep.announce(f"统计内置包 @deepseek-ai/{c.name} 大小…")
             data = _read_package_json(c)
             ver = data.get("version") or ""
-            size = dir_size(c, skip_dirs=("node_modules", ".git", ".pnpm"))
+            size = dir_size(c, skip_dirs=("node_modules", ".git", ".pnpm"),
+                            limit_files=200_000, limit_seconds=5.0)
             items.append(
                 {
                     "name": f"@deepseek-ai/{c.name}",
@@ -654,6 +674,7 @@ def scan_plugins(include_core: bool = True, on_progress=None) -> dict:
                 }
             )
         rep.step(name)
+    rep.finish()
     elapsed = time.monotonic() - start
     # 按启用优先、名称排序，方便阅读
     items.sort(key=lambda x: (not x["enabled"], x["name"].lower()))
@@ -724,21 +745,28 @@ def scan_skills(root: Path | None = None, on_progress=None) -> dict:
             "items": [], "root": str(skills_root), "errors": [str(e)],
             "elapsed": 0.0, "speed": 0.0,
         }
-    # 预筛候选（保持进度=已检查目录数）
+    # 预筛候选（保持进度=已检查目录数）。按官方文档：用户技能根跳过 .system 子目录，
+    # 并兼容“目录包 <name>/SKILL.md”与“平铺 <name>.md”两种形态。
     candidates = []
     for e in entries:
+        if e.name in (".system", ".git") and e.is_dir():
+            continue
         if e.is_dir():
             if (e / "SKILL.md").is_file() or (e / "README.md").is_file():
                 candidates.append(e)
         elif e.suffix.lower() in (".md", ".markdown"):
             candidates.append(e)
     rep = ProgressReporter(on_progress, len(candidates), "skills")
+    if not candidates:
+        rep.announce("未发现技能目录…")
     for e in candidates:
         # 目录技能：含 SKILL.md（或本身就是技能目录）
         if e.is_dir():
             name = e.name
+            rep.announce(f"统计技能 {name} 文件与大小…")
             ver = parse_skill_version(e) or ""
-            size = dir_size(e, skip_dirs=("node_modules", ".git", ".pnpm", "node_modules.bak"))
+            size = dir_size(e, skip_dirs=("node_modules", ".git", ".pnpm", "node_modules.bak"),
+                            limit_files=200_000, limit_seconds=5.0)
             items.append(
                 {
                     "name": name,
@@ -752,6 +780,7 @@ def scan_skills(root: Path | None = None, on_progress=None) -> dict:
         # 平铺单文件技能（*.md）
         else:
             name = e.stem
+            rep.announce(f"读取技能 {name}")
             size = e.stat().st_size if e.is_file() else 0
             items.append(
                 {
@@ -764,6 +793,7 @@ def scan_skills(root: Path | None = None, on_progress=None) -> dict:
                 }
             )
         rep.step(e.name)
+    rep.finish()
     elapsed = time.monotonic() - start
     return {
         "items": items,
