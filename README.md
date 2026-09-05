@@ -10,13 +10,52 @@
 
 ---
 
+## 安装方式
+
+### 环境要求
+| 项目 | 要求 |
+| --- | --- |
+| 操作系统 | Windows 10 / 11（本工具为 Windows 桌面程序） |
+| Python | 3.10 或更高（含 `tkinter`，Windows 官方安装包默认自带） |
+| 其它依赖 | 无 —— 全部使用 Python 标准库，无需 pip 安装任何第三方库 |
+| 网络 | 需要能访问 GitHub（对比官方版本 / 下载更新） |
+
+### 方式一：下载 ZIP（推荐，无需 git）
+1. 打开本仓库页面：<https://github.com/mutoharohfiqhiabcd-source/dsh-updater>
+2. 点击绿色按钮 **Code → Download ZIP**；
+3. 解压到任意目录（例如 `D:\dsh-updater`）；
+4. 双击 **`启动更新器.bat`** 即可运行（无控制台窗口）。
+
+### 方式二：git clone（适合关注后续更新）
+```bat
+git clone https://github.com/mutoharohfiqhiabcd-source/dsh-updater.git
+cd dsh-updater
+启动更新器.bat
+```
+> 后续更新：在目录内执行 `git pull` 即可获取最新版本。
+
+### 方式三：已有旧版 / 从本仓库更新
+如果您已经有一份本地拷贝（例如通过本工具或直接复制），只需用新文件覆盖即可：
+```bat
+copy /Y updater_gui.pyw updater_core.py dsh_updater.ico 目标目录\
+```
+
+### 首次运行（可选：创建桌面快捷方式）
+1. 运行一次确认界面正常；
+2. 如需桌面快捷方式：右键 **`启动更新器.bat`** → **发送到 → 桌面快捷方式**，
+   再把快捷方式**属性 → 目标**改为程序所在路径即可。
+
+> 提示：程序所在目录会生成 `dsh_plugins.csv` / `dsh_skills.csv`（导出功能产物），属正常运行数据。
+
+---
+
 ## 运行方式
 
 - 双击 **`启动更新器.bat`**（推荐，无控制台窗口），或
 - 双击 **`updater_gui.pyw`**（需已关联 pythonw），或
 - 命令行 `python updater_gui.pyw`
 
-> 依赖：Python 3.10+（含 tkinter，Windows 官方安装包自带）。无需安装任何第三方库。
+> 首次启动会自动检测本机安装并联网获取官方版本，请稍候片刻。
 
 ---
 
