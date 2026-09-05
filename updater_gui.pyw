@@ -96,12 +96,28 @@ class UpdaterApp:
         self.busy = False
         self._after_id = None
 
+        # 应用图标（与脚本同目录的 dsh_updater.ico）
+        self._icon_path = str(Path(__file__).resolve().parent / "dsh_updater.ico")
+        if Path(self._icon_path).is_file():
+            try:
+                root.iconbitmap(self._icon_path)
+            except Exception:  # noqa: BLE001
+                pass
+
         self._build_ui()
         self._log(f"{APP_TITLE} 已启动。\nDSH 数据目录：{core.DSH_HOME}")
         self._log("正在自动检测本机安装与官方版本…")
         self.refresh_all()
 
     # ---------------- UI 构建 ----------------
+    def _apply_icon(self, win: tk.Toplevel):
+        """给子窗口套用应用图标。"""
+        try:
+            if hasattr(self, "_icon_path") and Path(self._icon_path).is_file():
+                win.iconbitmap(self._icon_path)
+        except Exception:  # noqa: BLE001
+            pass
+
     def _build_ui(self):
         pad = {"padx": 10, "pady": 4}
 
@@ -323,6 +339,7 @@ class UpdaterApp:
         # 询问是否运行 pnpm install
         ask = tk.Toplevel(self.root)
         ask.title("更新源码检出")
+        self._apply_icon(ask)
         ask.transient(self.root)
         ask.grab_set()
         ask.resizable(False, False)
@@ -428,6 +445,7 @@ class UpdaterApp:
         win = tk.Toplevel(self.root)
         win.title(title)
         win.geometry("920x600")
+        self._apply_icon(win)
         win.transient(self.root)
 
         # ── 顶部：标题 + 进度条 + 效率标签 ──
