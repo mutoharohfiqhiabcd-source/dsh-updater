@@ -113,26 +113,255 @@ def compare_versions(a: str, b: str) -> int:
 
 
 # ---------------------------------------------------------------------------
+# 稳定性 / 适配性评估（依据官网信息）
+# ---------------------------------------------------------------------------
+# 稳定性分级：
+#   stable     官方最新发布版（npm latest / 无预发布后缀）
+#   candidate  官方发布候选（rc 后缀，且出现在官方 tags/npm 版本里）
+#   prerelease 预发布（alpha/beta 后缀）
+#   unstable   官网信息缺乏或无法核实的“不稳定版”（找不到对应官方记录）
+GRADE_LABELS = {
+    "stable": "稳定版",
+    "candidate": "候选版 rc",
+    "prerelease": "预发布 alpha",
+    "unstable": "不稳定版",
+}
+
+def _grade_by_suffix(version: str) -> str:
+    """按版本号后缀粗分级（用于本地版本还没有官网对照时）。"""
+    v = (version or "").strip().lower()
+    if not v:
+        return "unstable"
+    if any(k in v for k in ("alpha", "beta", "preview", "dev")):
+        return "prerelease"
+    if "-rc" in v or "rc." in v or v.endswith("-rc") or ".rc" in v:
+        return "candidate"
+    if any(ch.isdigit() for ch in v) and "-" not in v:
+        return "stable"
+    return "unstable"
+
+
+def assess_version(version: str, official: dict | None, kind_for_ref: str = "npm") -> dict:
+    """
+    依据官网信息评估一个版本/更新目标的稳定性与适配性。
+    kind_for_ref: 'npm'（对 npm 发布版）或 'github'（对 GitHub master 源码）。
+
+    返回：{
+      "version": ..., "grade": stable|candidate|prerelease|unstable,
+      "grade_label": ..., "reason": str,
+      "in_official": bool, "is_official_latest": bool,
+      "node_ok": bool|None, "node_reason": str,
+    }
+    """
+    v = (version or "").strip()
+    if not v:
+        return {"version": v, "grade": "unstable", "grade_label": GRADE_LABELS["unstable"],
+                "reason": "版本号为空，官网无法核实", "in_official": False,
+                "is_official_latest": False, "node_ok": None, "node_reason": "无法评估"}
+
+    official = official or {}
+    ref = official.get(kind_for_ref) or {}
+    npm = official.get("npm") or {}
+    gh = official.get("github") or {}
+    npm_ok = bool(npm.get("version"))
+    gh_ok = bool(gh.get("version"))
+
+    # 官方发布记录全集
+    official_versions: list[str] = list(npm.get("versions") or []) + list(gh.get("tags") or [])
+    dist_tags: dict = npm.get("dist_tags") or {}
+    latest = dist_tags.get("latest") or npm.get("version")
+
+    in_official = v in official_versions or v == latest or (
+        bool(npm_ok or gh_ok) and (v in (npm.get("versions") or []) or v in (gh.get("tags") or []))
+    )
+    is_latest = bool(latest) and v == latest
+
+    reason_parts = []
+    node_ok = None
+    node_reason = "该版本未声明 Node.js 运行要求（官方 engines 缺失）"
+    engines = ref.get("engines_node") or npm.get("engines_node")
+    if not engines:
+        # 本机 node 版本用于适配性判断
+        node_ok = None
+    else:
+        cur_node = _local_node_version()
+        node_ok = _match_node_range(cur_node, engines) if cur_node else None
+        if node_ok is True:
+            node_reason = f"本机 Node {cur_node} 满足官方要求 {engines}"
+        elif node_ok is False:
+            node_reason = f"本机 Node {cur_node} 不满足官方要求 {engines}（不适配）"
+        else:
+            node_reason = f"官方要求 Node {engines}，无法精确判定当前环境"
+    reason_parts.append(node_reason)
+
+    # —— 分级 ——
+    if is_latest:
+        grade = "stable"
+    elif in_official:
+        grade = _grade_by_suffix(v)
+    else:
+        # 官网可用？若官网完全没信息 → 不稳定版；若有信息但找不到该版本记录 → 也不稳定
+        if not npm_ok and not gh_ok:
+            grade = "unstable"
+            reason_parts.insert(0, "官网信息获取失败（GitHub 与 npm 均不可用），无法核实")
+        else:
+            grade = "unstable"
+            reason_parts.insert(0, "该版本未出现在官方发布记录（GitHub tags / npm 版本表）中，无法核实其稳定性")
+    if grade == "stable":
+        reason_parts.insert(0, "与官方最新发布版（npm latest）一致")
+    elif grade == "unstable":
+        pass
+    else:
+        reason_parts.insert(0, f"官方发布记录中存在该版本（预发布/候选版本）")
+
+    return {
+        "version": v,
+        "grade": grade,
+        "grade_label": GRADE_LABELS.get(grade, "不稳定版"),
+        "reason": "；".join(dict.fromkeys(reason_parts)),
+        "in_official": in_official,
+        "is_official_latest": is_latest,
+        "node_ok": node_ok,
+        "node_reason": node_reason,
+    }
+
+
+def _local_node_version() -> str:
+    try:
+        for exe in ("node", "node.exe"):
+            p = shutil.which(exe)
+            if p:
+                r = subprocess.run([p, "--version"], capture_output=True, text=True, timeout=10,
+                                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                if r.returncode == 0:
+                    return (r.stdout or "").strip().lstrip("v")
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
+
+
+# ---------------------------------------------------------------------------
 # 官方版本
 # ---------------------------------------------------------------------------
+def _fetch_npm_versions() -> list:
+    """通过 `npm view` 取官方发布过的全部版本号；失败返回空。"""
+    for exe in ("npm", "npm.cmd"):
+        p = shutil.which(exe)
+        if not p:
+            continue
+        try:
+            r = subprocess.run(
+                [p, "view", "@deepseek-ai/dsh", "versions", "--json"],
+                capture_output=True, text=True, timeout=40,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                v = json.loads(r.stdout)
+                if isinstance(v, list):
+                    return [str(x) for x in v]
+        except Exception:  # noqa: BLE001
+            pass
+    return []
+
+
+def _fetch_gh_tag_versions() -> list:
+    """取官方 GitHub tags（dsh-v* 形式），返回纯版本号列表。"""
+    out = []
+    try:
+        tags = http_get_json(
+            f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/tags?per_page=100",
+            timeout=20,
+        )
+        for t in tags:
+            name = str(t.get("name", ""))
+            if name.startswith("dsh-v"):
+                name = name[len("dsh-v"):]
+            if name:
+                out.append(name)
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
+def _match_node_range(version: str, ranges: str | None):
+    """
+    粗略判断 version 是否满足 engines.node 表达式。
+    支持空格分隔的多个约束（隐含 AND），及 `||` 分支。
+    返回 True / False；无法解析时返回 None。
+    """
+    if not ranges or not version:
+        return None
+    try:
+        cur = tuple(int(x) for x in re.findall(r"\d+", version)[:3])
+    except Exception:  # noqa: BLE001
+        return None
+
+    def eval_one(cond: str) -> bool | None:
+        cond = cond.strip()
+        m = re.match(r"^(>=|<=|>|<|=|\^|~)?\s*v?(\d+)(?:\.(\d+))?(?:\.(\d+))?$", cond)
+        if not m:
+            return None
+        op, maj, mnr, pat = m.group(1) or "=", m.group(2), m.group(3), m.group(4)
+        base = (int(maj), int(mnr or 0), int(pat or 0))
+        if op == "=":
+            return cur[:3] == base
+        if op == "^":
+            # 主版本 0 时 ^ 只锁 minor（简化为锁前两位）
+            if base[0] == 0:
+                return cur[:2] == base[:2]
+            return cur[0] == base[0] and cur[1:] >= base[1:]
+        if op == "~":
+            return cur[:2] == base[:2] and cur[2] >= base[2]
+        if op == ">=":
+            return cur >= base
+        if op == ">":
+            return cur > base
+        if op == "<=":
+            return cur <= base
+        if op == "<":
+            return cur < base
+        return None
+
+    for branch in str(ranges).split("||"):
+        parts = re.split(r"\s+", branch.strip())
+        ok = True
+        for part in parts:
+            if not part:
+                continue
+            r = eval_one(part)
+            if r is False:
+                ok = False
+                break
+            if r is None:
+                return None  # 出现无法解析的分支
+        if ok:
+            return True
+    return False
+
+
 def fetch_official_versions() -> dict:
     """
     返回形如：
       {
         "github": {"ok": bool, "version": str|None, "commit": str|None,
-                    "date": str|None, "error": str|None},
-        "npm":    {"ok": bool, "version": str|None, "error": str|None},
+                    "date": str|None, "error": str|None,
+                    "tags": [...], "engines_node": str|None, "recent": [...]},
+        "npm":    {"ok": bool, "version": str|None, "dist_tags": {...},
+                    "versions": [...], "engines_node": str|None, "error": str|None},
       }
     """
     out = {
-        "github": {"ok": False, "version": None, "commit": None, "date": None, "error": None},
-        "npm": {"ok": False, "version": None, "error": None},
+        "github": {"ok": False, "version": None, "commit": None, "date": None, "error": None,
+                   "tags": [], "engines_node": None, "recent": []},
+        "npm": {"ok": False, "version": None, "dist_tags": {}, "versions": [],
+                "engines_node": None, "error": None},
     }
-    # GitHub master package.json
+    # GitHub master package.json（含 engines）
     try:
         text = http_get_text(RAW_PACKAGE_URL, timeout=25)
         data = json.loads(text)
         out["github"]["version"] = data.get("version") or _parse_package_version(text)
+        out["github"]["engines_node"] = (data.get("engines") or {}).get("node")
         out["github"]["ok"] = bool(out["github"]["version"])
     except Exception as e:  # noqa: BLE001
         out["github"]["error"] = str(e)
@@ -144,13 +373,23 @@ def fetch_official_versions() -> dict:
             out["github"]["date"] = (commit.get("commit", {}).get("committer", {}) or {}).get("date")
         except Exception:  # noqa: BLE001
             pass
-    # npm registry 发布版
+    # npm registry 发布版（dist-tags 优先，其次 latest 单点）
     try:
-        data = http_get_json(NPM_LATEST_URL, timeout=25)
-        out["npm"]["version"] = data.get("version")
+        tags_json = http_get_json(
+            "https://registry.npmjs.org/-/package/@deepseek-ai/dsh/dist-tags", timeout=20
+        )
+        out["npm"]["dist_tags"] = {str(k): str(v) for k, v in (tags_json or {}).items()}
+        out["npm"]["version"] = out["npm"]["dist_tags"].get("latest")
         out["npm"]["ok"] = bool(out["npm"]["version"])
     except Exception as e:  # noqa: BLE001
         out["npm"]["error"] = str(e)
+        try:
+            data = http_get_json(NPM_LATEST_URL, timeout=25)
+            out["npm"]["version"] = data.get("version")
+            out["npm"]["engines_node"] = (data.get("engines") or {}).get("node")
+            out["npm"]["ok"] = bool(out["npm"]["version"])
+        except Exception as e2:  # noqa: BLE001
+            out["npm"]["error"] = f"{e}; {e2}"
     # 官方近期提交（用于“更新了些什么”提示）
     try:
         commits = http_get_json(
@@ -165,6 +404,12 @@ def fetch_official_versions() -> dict:
             out["github"]["recent"].append({"sha": str(c.get("sha", ""))[:8], "msg": first, "date": date[:10]})
     except Exception:  # noqa: BLE001
         out["github"]["recent"] = []
+    # 官方发布版本全集：GH tags + npm 全版本
+    out["github"]["tags"] = _fetch_gh_tag_versions()
+    out["npm"]["versions"] = _fetch_npm_versions()
+    # npm 若未单独声明 engines，回退用官方仓库 master 的 engines（同一项目）
+    if not out["npm"].get("engines_node"):
+        out["npm"]["engines_node"] = out["github"].get("engines_node")
     return out
 
 
@@ -172,7 +417,10 @@ def fetch_official_versions() -> dict:
 # 源码检出检测
 # ---------------------------------------------------------------------------
 def _is_source_checkout(path: Path) -> bool:
-    """判定目录是否为 DSH 源码检出根：package.json name == @deepseek-ai/dsh-root。"""
+    """判定目录是否为 DSH 源码检出根：package.json name == @deepseek-ai/dsh-root。
+    自动排除本工具生成的备份目录（*.dsh-bak-*）。"""
+    if ".dsh-bak-" in path.name:
+        return False
     pkg = path / "package.json"
     if not pkg.is_file():
         return False
@@ -365,9 +613,36 @@ def find_profiles() -> list:
 # ---------------------------------------------------------------------------
 # 汇总检测
 # ---------------------------------------------------------------------------
+def _norm_path_key(path: str | Path) -> str:
+    """路径规范化键：解析 junction/symlink 真身 + 小写，用于重复自检。"""
+    try:
+        real = os.path.realpath(str(path))
+    except Exception:  # noqa: BLE001
+        real = str(path)
+    try:
+        real = os.path.normcase(os.path.normpath(real))
+    except Exception:  # noqa: BLE001
+        pass
+    return real
+
+
+def _dedupe_installs(installs: list) -> dict:
+    """按真实路径去重；返回 (去重列表, 统计信息)。"""
+    seen: dict[str, dict] = {}
+    removed: list[dict] = []
+    for inst in installs:
+        key = _norm_path_key(inst["path"])
+        if key in seen:
+            removed.append(inst)
+            continue
+        seen[key] = inst
+    return {"installs": list(seen.values()), "removed": removed}
+
+
 def detect_all() -> dict:
     """检测本机所有 DSH 安装并拉取官方版本。返回 dict。"""
-    result = {"installs": [], "official": None, "errors": []}
+    result = {"installs": [], "official": None, "errors": [],
+              "selfcheck": {"duplicates": 0, "notes": []}}
     # 源码检出
     for path, kind, ver in find_source_checkouts():
         result["installs"].append(
@@ -402,6 +677,17 @@ def detect_all() -> dict:
                 "updateable": False,
             }
         )
+
+    # —— 自检 1：同一真实位置去重（防 junction/链接导致同一安装出现多次）——
+    dedup = _dedupe_installs(result["installs"])
+    result["installs"] = dedup["installs"]
+    result["selfcheck"]["duplicates"] = len(dedup["removed"])
+    if dedup["removed"]:
+        result["selfcheck"]["notes"].append(
+            "已合并 %d 处指向同一真实路径的重复安装：%s"
+            % (len(dedup["removed"]), "、".join(r["path"] for r in dedup["removed"][:3]))
+        )
+
     # 官方版本
     result["official"] = fetch_official_versions()
     # 状态标注：源码检出对比 GitHub master；npm/profile 对比 npm 发布版
@@ -411,17 +697,36 @@ def detect_all() -> dict:
         local = inst["version"] or ""
         if not local:
             inst["status"] = "无法读取版本"
-            continue
-        if inst["kind"] == INSTALL_KIND_SOURCE:
+        elif inst["kind"] == INSTALL_KIND_SOURCE:
             ref, ref_ok = official_gh, bool(official_gh)
+            ref_kind = "github"
         else:
             ref, ref_ok = official_npm, bool(official_npm)
-        if ref_ok and compare_versions(ref, local) > 0:
-            inst["status"] = "可更新"
-        elif not ref_ok and not (official_gh and official_npm):
-            inst["status"] = "官方版本获取失败"
+            ref_kind = "npm"
+        inst["ref_version"] = ref or ""
+        inst["ref_kind"] = ref_kind
+        if local:
+            if ref_ok and compare_versions(ref, local) > 0:
+                inst["status"] = "可更新"
+            elif not ref_ok and not (official_gh and official_npm):
+                inst["status"] = "官方版本获取失败"
+            else:
+                inst["status"] = "已是最新"
+            # —— 稳定性 / 适配性评估（依据官网信息）——
+            inst["assess"] = assess_version(local, result["official"], kind_for_ref=ref_kind)
+            inst["grade"] = inst["assess"]["grade"]
+            inst["grade_label"] = inst["assess"]["grade_label"]
         else:
-            inst["status"] = "已是最新"
+            inst["grade"] = "unstable"
+            inst["grade_label"] = GRADE_LABELS["unstable"]
+            inst["assess"] = {"grade": "unstable", "grade_label": GRADE_LABELS["unstable"],
+                              "reason": "版本号为空，官网无法核实"}
+    # —— 自检 2：官方参照目标本身也做评估（更新文件稳定性）——
+    for tag, kind_for in (("github", "github"), ("npm", "npm")):
+        v = result["official"][tag].get("version")
+        if v:
+            result["official"][tag]["assess"] = assess_version(v, result["official"],
+                                                               kind_for_ref=kind_for)
     return result
 
 
@@ -678,6 +983,9 @@ def scan_plugins(include_core: bool = True, on_progress=None) -> dict:
     elapsed = time.monotonic() - start
     # 按启用优先、名称排序，方便阅读
     items.sort(key=lambda x: (not x["enabled"], x["name"].lower()))
+    # 自检：同一真实目录只保留一项（防 junction/多来源重复）
+    dedup_plugins = _dedupe_scan_items(items)
+    items = dedup_plugins["items"]
     if not items and not errors:
         errors.append(
             "未找到任何插件：请检查 DSH 数据目录是否存在，或本机是否安装了运行时插件包。"
@@ -689,7 +997,23 @@ def scan_plugins(include_core: bool = True, on_progress=None) -> dict:
         "errors": errors,
         "elapsed": elapsed,
         "speed": (len(items) / elapsed) if elapsed > 0 else 0.0,
+        "selfcheck": {"duplicates": dedup_plugins["removed"]},
     }
+
+
+def _dedupe_scan_items(items: list) -> dict:
+    """按 (真实路径) 去重扫描结果，保留第一次出现者。"""
+    seen: set = set()
+    kept: list = []
+    removed = 0
+    for it in items:
+        key = _norm_path_key(it.get("path", ""))
+        if not key or key in seen:
+            removed += 1
+            continue
+        seen.add(key)
+        kept.append(it)
+    return {"items": kept, "removed": removed}
 
 
 # ---------------------------------------------------------------------------
@@ -795,12 +1119,15 @@ def scan_skills(root: Path | None = None, on_progress=None) -> dict:
         rep.step(e.name)
     rep.finish()
     elapsed = time.monotonic() - start
+    dedup_skills = _dedupe_scan_items(items)
+    items = dedup_skills["items"]
     return {
         "items": items,
         "root": str(skills_root),
         "errors": errors,
         "elapsed": elapsed,
         "speed": (len(items) / elapsed) if elapsed > 0 else 0.0,
+        "selfcheck": {"duplicates": dedup_skills["removed"]},
     }
 
 

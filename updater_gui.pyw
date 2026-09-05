@@ -74,12 +74,15 @@ KIND_INFO = {
     },
 }
 
-# Treeview 状态 tag → 颜色（可更新/已最新/其它）
+# Treeview 状态/性质 tag → 颜色（可更新/最新/候选/预发布/不稳定）
 STATUS_TAG = {
     "update": "#b35900",
     "ok": "#1a7f37",
     "err": "#c5221f",
     "dim": "#5a6a7a",
+    "candidate": "#8a5a00",      # 候选版 rc（琥珀偏深）
+    "prerelease": "#7b1fa2",     # 预发布 alpha（紫）
+    "unstable": "#c2185b",       # 不稳定版（洋红，特殊醒目色）
 }
 
 # ---------------------------------------------------------------------------
@@ -269,26 +272,31 @@ class UpdaterApp:
         self.lbl_npm.pack(anchor="e", pady=(2, 0))
 
         # ── 中部：安装列表 ──
-        mid = ttk.LabelFrame(self.root, text="本机检测到的 DeepSeek Harness 安装（悬停“类型”列查看说明）")
+        mid = ttk.LabelFrame(self.root, text="本机检测到的 DeepSeek Harness 安装（悬停“类型/状态/性质”列查看说明）")
         mid.pack(fill="both", expand=False, padx=10, pady=6)
-        cols = ("kind", "path", "version", "ref", "status")
+        cols = ("kind", "path", "version", "nature", "ref", "status")
         heads = {"kind": "类型", "path": "位置", "version": "当前版本",
-                 "ref": "官方参考版本", "status": "状态"}
+                 "nature": "版本性质", "ref": "官方参考版本", "status": "状态"}
         self.tree = ttk.Treeview(mid, columns=cols, show="headings", height=6)
         for c in cols:
             self.tree.heading(c, text=heads[c])
-        widths = {"kind": 128, "path": 430, "version": 122, "ref": 130, "status": 110}
+        widths = {"kind": 112, "path": 372, "version": 100, "nature": 92, "ref": 112, "status": 96}
         for c in cols:
-            self.tree.column(c, width=widths[c], anchor="w")
+            self.tree.column(c, width=widths[c], anchor="w", stretch=(c == "path"))
         vsb = ttk.Scrollbar(mid, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=vsb.set)
         self.tree.pack(side="left", fill="both", expand=True, padx=(6, 0), pady=6)
         vsb.pack(side="right", fill="y", padx=(0, 6), pady=6)
-        # 状态 tag
+        # 状态/性质 tag（含整行背景色，让“不稳定版”特别醒目）
+        tag_bg = {
+            "update": "#fff3e0", "ok": "#e8f5e9", "err": "#fdecea",
+            "dim": "#f4f6f9", "candidate": "#fff8e1", "prerelease": "#f3e5f5",
+            "unstable": "#fce4ec",
+        }
         for tag, col in STATUS_TAG.items():
-            self.tree.tag_configure(tag, foreground=col)
+            self.tree.tag_configure(tag, foreground=col, background=tag_bg.get(tag, "#ffffff"))
         self.tree.bind("<Double-1>", self._on_row_double)
-        # hover 浮窗（“类型”列 / 状态列均有说明）
+        # hover 浮窗（“类型”列 / 状态列 / 性质列均有说明）
         self.tree.bind("<Motion>", self._on_tree_motion)
         self.tree.bind("<Leave>", lambda e: self._hide_tip())
         self._tip_win = None
@@ -403,26 +411,65 @@ class UpdaterApp:
         npm_txt = npm.get("version") or "获取失败"
         if gh.get("version"):
             gh_txt += f"（{gh.get('date', '')[:10]}）"
-        self.lbl_github.configure(text=f"官方 GitHub master：{gh_txt}")
-        self.lbl_npm.configure(text=f"npm 发布版：{npm_txt}")
+        gh_assess = gh.get("assess") or {}
+        npm_assess = npm.get("assess") or {}
+        if gh_assess.get("grade") in ("prerelease", "unstable"):
+            gh_txt += f"〔{gh_assess.get('grade_label', '')}〕"
+        if npm_assess.get("grade") in ("prerelease", "unstable", "candidate"):
+            npm_txt += f"〔{npm_assess.get('grade_label', '')}〕"
+        self.lbl_github.configure(text=f"🌐 官方 GitHub master：{gh_txt}")
+        self.lbl_npm.configure(text=f"📦 npm 发布版：{npm_txt}")
 
         for iid in self.tree.get_children():
             self.tree.delete(iid)
         self.install_rows = []
         for inst in result["installs"]:
-            ref = gh.get("version") or "" if inst["kind"] == core.INSTALL_KIND_SOURCE else (npm.get("version") or "")
+            if inst["kind"] == core.INSTALL_KIND_SOURCE:
+                ref = gh.get("version") or ""
+            else:
+                ref = npm.get("version") or ""
+            nature = inst.get("grade_label", "—")
             row = (inst["kind_label"], inst["path"], inst["version"] or "—",
-                   ref or "—", inst.get("status", "—"))
-            tag = self._status_tag(inst.get("status", ""))
+                   nature, ref or "—", inst.get("status", "—"))
+            tag = self._row_tag(inst)
             iid = self.tree.insert("", "end", values=row, tags=(tag,))
             self.install_rows.append({"iid": iid, "data": inst})
             self._log(
                 f"[{inst['kind_label']}] {inst['path']}\n"
-                f"    当前 {inst['version'] or '—'} / 官方 {ref or '—'} / {inst.get('status', '—')}"
+                f"    当前 {inst['version'] or '—'} / 性质 {nature} / 官方 {ref or '—'} / {inst.get('status', '—')}"
             )
-        self._set_status(f"检测完成：发现 {len(result['installs'])} 处安装")
+            assess = inst.get("assess") or {}
+            if assess.get("reason") and assess.get("grade") != "stable":
+                self._log(f"    └ 稳定性判定：{assess['reason']}")
+        # —— 自检结果 ——
+        sc = result.get("selfcheck") or {}
+        if sc.get("duplicates"):
+            self._log(f"🛡 自检：发现并合并 {sc['duplicates']} 处重复安装（同一真实路径）")
+            for n in sc.get("notes", []):
+                self._log(f"    └ {n}")
+        self._set_status(f"检测完成：发现 {len(result['installs'])} 处安装"
+                         + (f"（自检合并重复 {sc.get('duplicates', 0)} 处）" if sc.get("duplicates") else ""))
         if not result["installs"]:
             self._log("未自动发现安装，可使用界面按钮或自行检查路径。")
+
+    @staticmethod
+    def _row_tag(inst: dict) -> str:
+        """行 tag 优先级：不稳定/预发布最醒目，其次可更新状态。"""
+        grade = inst.get("grade", "")
+        if grade == "unstable":
+            return "unstable"
+        if grade == "prerelease":
+            return "prerelease"
+        status = inst.get("status", "")
+        if "可更新" in status:
+            return "update"
+        if grade == "candidate":
+            return "candidate"
+        if status == "已是最新":
+            return "ok"
+        if status and "失败" in status:
+            return "err"
+        return "dim"
 
     @staticmethod
     def _status_tag(status: str) -> str:
@@ -512,20 +559,40 @@ class UpdaterApp:
         cur = inst["version"] or "—"
         ref = (self.official["github"]["version"] if self.official else None) or "—"
         ttk.Label(frm, text=f"当前版本：{cur}    官方最新：{ref}").grid(row=2, column=0, sticky="w", pady=4)
+        # 目标版本稳定性/适配性提示
+        gh = (self.official or {}).get("github", {}) or {}
+        gh_assess = gh.get("assess") or {}
+        if gh_assess.get("grade"):
+            notes = []
+            gl = gh_assess.get("grade_label", "")
+            if gh_assess.get("grade") == "stable":
+                notes.append(f"官方最新 {ref} 为【{gl}】。")
+            elif gh_assess.get("grade") == "candidate":
+                notes.append(f"官方最新 {ref} 为【{gl}】，发布候选版。")
+            elif gh_assess.get("grade") == "prerelease":
+                notes.append(f"⚠ 官方最新 {ref} 为【{gl}】（预发布），可能存在兼容性变化，请按需更新。")
+            else:
+                notes.append(f"🛑 官方最新 {ref} 官网信息不足，判定为【{gl}】，请谨慎更新。")
+            if gh_assess.get("node_reason"):
+                notes.append(f"适配性：{gh_assess['node_reason']}")
+            if notes:
+                ttk.Label(
+                    frm, text="\n".join(notes), wraplength=560, foreground="#b3261e",
+                ).grid(row=3, column=0, sticky="w", pady=(0, 6))
         ttk.Label(
             frm,
             text="流程：下载官方源码 zip → 备份原目录（同盘改名）→ 整目录替换\n"
                  "（node_modules / .git 会自动移回新目录，以加快依赖安装）\n"
                  "更新期间请勿关闭本程序；若 DSH Web (3080) 正在运行将中止更新。",
             foreground="#a00", wraplength=560,
-        ).grid(row=3, column=0, sticky="w", pady=6)
+        ).grid(row=4, column=0, sticky="w", pady=6)
         self.var_pnpm = tk.BooleanVar(value=False)
         ttk.Checkbutton(
             frm, text="替换后自动运行 pnpm install（推荐，用于同步依赖）",
             variable=self.var_pnpm,
-        ).grid(row=4, column=0, sticky="w", pady=4)
+        ).grid(row=5, column=0, sticky="w", pady=4)
         btns = ttk.Frame(frm)
-        btns.grid(row=5, column=0, sticky="e", pady=(10, 0))
+        btns.grid(row=6, column=0, sticky="e", pady=(10, 0))
         ttk.Button(btns, text="开始更新", command=lambda: self._run_source_update(inst, ask)).pack(side="left", padx=4)
         ttk.Button(btns, text="取消", command=ask.destroy).pack(side="left")
 
@@ -896,14 +963,31 @@ class UpdaterApp:
                 return
             if col == "#1":  # 类型列
                 text = self._kind_tip_text(inst)
-                self._show_tip(event, text, width=460)
-            elif col == "#5":  # 状态列
+                self._show_tip(event, text, width=480)
+            elif col == "#4":  # 版本性质列
+                text = self._nature_tip_text(inst)
+                self._show_tip(event, text, width=360)
+            elif col == "#6":  # 状态列
                 text = self._status_tip_text(inst)
-                self._show_tip(event, text, width=300)
+                self._show_tip(event, text, width=340)
             else:
                 self._hide_tip()
         except tk.TclError:
             self._hide_tip()
+
+    def _stability_line(self, inst: dict, with_title: bool = True) -> str:
+        """返回稳定性/适配性的展示文本。"""
+        assess = inst.get("assess") or {}
+        grade = assess.get("grade", inst.get("grade", ""))
+        label = assess.get("grade_label", inst.get("grade_label", ""))
+        reason = assess.get("reason", "")
+        color_note = {"stable": "✅", "candidate": "🟠", "prerelease": "🟣", "unstable": "🛑"}.get(grade, "")
+        head = f"◉ 版本性质：{label} {color_note}" if with_title else f"{label} {color_note}"
+        if grade == "unstable":
+            head += "\n   ⚠ 未能在官网核实该版本 —— 视为【不稳定版】，请谨慎使用"
+        if reason:
+            head += f"\n   依据：{reason}"
+        return head
 
     def _kind_tip_text(self, inst: dict) -> str:
         kind = inst["kind"]
@@ -930,6 +1014,8 @@ class UpdaterApp:
             f"◉ 版本：本地 {local}   ∥   官方({info['ref']}) {ref}",
             f"◉ 是否需要立即更新：{'是，有可用更新' if need else '否，已是最新'}",
             "",
+            self._stability_line(inst),
+            "",
             f"◉ 更新方式：{info['how']}",
         ]
         if need and recent:
@@ -941,15 +1027,28 @@ class UpdaterApp:
         lines.append("（提示：更新前请先退出正在运行的 DeepSeek Harness）")
         return "\n".join(lines)
 
+    def _nature_tip_text(self, inst: dict) -> str:
+        ver = inst.get("version") or "—"
+        return f"当前版本 {ver}\n\n{self._stability_line(inst)}"
+
     def _status_tip_text(self, inst: dict) -> str:
         status = inst.get("status", "—")
         ver = inst.get("version") or "—"
+        base = ""
         if status == "可更新":
-            return (f"当前版本 {ver} 落后于官方，可点击\n"
+            base = (f"当前版本 {ver} 落后于官方，可点击\n"
                     f"「⬇ 更新所选安装」一键升级（自动备份后替换）。")
-        if status == "已是最新":
-            return f"当前版本 {ver} 与官方一致，无需更新。"
-        return f"状态：{status}\n（版本信息：{ver}）"
+        elif status == "已是最新":
+            base = f"当前版本 {ver} 与官方一致，无需更新。"
+        else:
+            base = f"状态：{status}\n（版本信息：{ver}）"
+        # 若该版本不稳定，追加醒目提示
+        grade = inst.get("grade", "")
+        if grade == "unstable":
+            base += "\n\n🛑 注意：该版本【不稳定版】，官网无法核实，升级请谨慎。"
+        elif grade == "prerelease":
+            base += "\n\n🟣 提示：该版本为官方预发布（alpha/beta），可能存在兼容性变化。"
+        return base
 
     def _show_tip(self, event, text: str, width: int = 460):
         if self._tip_win is not None:
