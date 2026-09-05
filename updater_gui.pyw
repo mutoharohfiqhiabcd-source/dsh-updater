@@ -19,6 +19,21 @@ import updater_core as core
 
 APP_TITLE = "DeepSeek Harness 自动检测与更新器"
 
+
+def resource_path(name: str) -> str:
+    """定位资源文件：开发时返回脚本同目录，PyInstaller 打包后返回内置资源（_MEIPASS）。"""
+    base = getattr(sys, "_MEIPASS", None)
+    if base:
+        return str(Path(base) / name)
+    return str(Path(__file__).resolve().parent / name)
+
+
+def app_dir() -> Path:
+    """返回“程序所在目录”：打包后为 exe 所在目录，开发时为脚本目录（用于导出 CSV 等）。"""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
 # ---------------------------------------------------------------------------
 # 主题色板（美工）
 # ---------------------------------------------------------------------------
@@ -162,8 +177,8 @@ class UpdaterApp:
         self.busy = False
         self._after_id = None
 
-        # 应用图标（与脚本同目录的 dsh_updater.ico）
-        self._icon_path = str(Path(__file__).resolve().parent / "dsh_updater.ico")
+        # 应用图标（开发时与脚本同目录；PyInstaller 打包后内置在 exe 资源中）
+        self._icon_path = str(resource_path("dsh_updater.ico"))
         if Path(self._icon_path).is_file():
             try:
                 root.iconbitmap(self._icon_path)
@@ -901,9 +916,9 @@ class UpdaterApp:
 
     # ---------------- CSV 导出 ----------------
     def export_csv(self):
-        # 重扫一次并导出两份 CSV 到程序目录
+        # 重扫一次并导出两份 CSV 到程序所在目录
         import csv
-        base = Path(__file__).resolve().parent
+        base = app_dir()
         try:
             plugins = core.scan_plugins(include_core=True)
             skills = core.scan_skills()

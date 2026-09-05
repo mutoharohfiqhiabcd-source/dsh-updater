@@ -11,6 +11,11 @@ dsh_skills.csv
 *.dsh-bak-*/
 *.log
 
+# PyInstaller 构建产物
+build/
+dist/
+*.spec
+
 # 系统/编辑器
 Thumbs.db
 Desktop.ini
