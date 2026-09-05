@@ -444,6 +444,49 @@ def human_size(n: int) -> str:
 # ---------------------------------------------------------------------------
 # 插件检测
 # ---------------------------------------------------------------------------
+class ProgressReporter:
+    """扫描/下载/解压共用的进度上报器：按项推进并携带已用时间与阶段名。"""
+
+    def __init__(self, cb, total: int, phase: str, start_done: int = 0):
+        self.cb = cb
+        self.total = total
+        self.done = start_done
+        self.phase = phase
+        self.start = time.monotonic()
+
+    def step(self, current: str = ""):
+        self.done += 1
+        if self.cb:
+            try:
+                self.cb(
+                    {
+                        "phase": self.phase,
+                        "done": self.done,
+                        "total": self.total,
+                        "current": current,
+                        "elapsed": time.monotonic() - self.start,
+                    }
+                )
+            except Exception:  # noqa: BLE001  （GUI 回调不应拖垮扫描）
+                pass
+
+    def finish(self):
+        if self.cb:
+            try:
+                self.cb(
+                    {
+                        "phase": self.phase,
+                        "done": self.total,
+                        "total": self.total,
+                        "current": "",
+                        "elapsed": time.monotonic() - self.start,
+                        "finished": True,
+                    }
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
+
 def _find_package_dir(name: str, search_roots: list) -> Path | None:
     """在多个 node_modules 根中定位包目录（支持 @scope/name 与扁平名）。"""
     if name.startswith("@"):
@@ -472,16 +515,17 @@ def profile_plugin_manifest(profile_dir: Path) -> dict:
     return _read_package_json(profile_dir)
 
 
-def scan_plugins(include_core: bool = True) -> dict:
+def scan_plugins(include_core: bool = True, on_progress=None) -> dict:
     """
     扫描 DSH 插件。
 
     返回：{"items":[{name, version, size, size_text, path, enabled, source}],
-          "total_items": n, "errors": []}
+          "total_items": n, "errors": [], "elapsed": float, "speed": float(项/秒)}
 
-    - enabled 插件：所有 profile 的 package.json dependencies + dsh.profile.bundles 顶层包
-    - 运行时包：DSH_HOME/profiles/node_modules/@deepseek-ai 下 dsh-*/cordis 等（include_core=True 时）
+    on_progress(rep: dict) —— 每处理完一项回调一次：
+      {"phase", "done", "total", "current", "elapsed"}（current 为当前包名）。
     """
+    start = time.monotonic()
     items: list = []
     errors: list = []
     seen: set = set()
@@ -493,6 +537,8 @@ def scan_plugins(include_core: bool = True) -> dict:
         if nm.is_dir():
             search_roots.append(nm)
 
+    # ---- 先统计总任务数，用于精确进度 ----
+    task_names: list[tuple[str, str, str]] = []   # (kind, 名称/路径, profile名)
     # 1) 启用清单：profile package.json 的 dependencies + bundles
     for profile_dir, *_ in profiles:
         manifest = profile_plugin_manifest(profile_dir)
@@ -500,19 +546,36 @@ def scan_plugins(include_core: bool = True) -> dict:
         bundles = ((manifest.get("dsh") or {}).get("profile") or {}).get("bundles") or []
         names += [b for b in bundles if b not in names]
         for name in names:
-            key = name
-            if key in seen:
-                continue
+            if name not in seen:
+                seen.add(name)
+                task_names.append(("enabled", name, Path(profile_dir).name))
+    # 2) 运行时内置包
+    core_dirs: list[Path] = []
+    if include_core:
+        core_root = profiles_root / "node_modules" / "@deepseek-ai"
+        if core_root.is_dir():
+            try:
+                for c in sorted(core_root.iterdir()):
+                    if c.is_dir() and (c.name.startswith("dsh-") or c.name.startswith("cordis")):
+                        key = f"@deepseek-ai/{c.name}"
+                        if key not in seen:
+                            seen.add(key)
+                            task_names.append(("core", str(c), ""))
+            except Exception:  # noqa: BLE001
+                pass
+
+    rep = ProgressReporter(on_progress, len(task_names), "plugins")
+
+    for kind, name, profile_name in task_names:
+        if kind == "enabled":
             pkg_dir = _find_package_dir(name, search_roots)
             if pkg_dir is None:
-                # 模板包可能在父级 @deepseek-ai 下也找不到，跳过记录 error
                 errors.append(f"无法解析已启用插件 {name}（未在 node_modules 找到）")
-                seen.add(key)
+                rep.step(name)
                 continue
             data = _read_package_json(pkg_dir)
             ver = data.get("version") or ""
             size = dir_size(pkg_dir, skip_dirs=("node_modules", ".git", ".pnpm"))
-            seen.add(key)
             items.append(
                 {
                     "name": name,
@@ -521,41 +584,36 @@ def scan_plugins(include_core: bool = True) -> dict:
                     "size_text": human_size(size),
                     "path": str(pkg_dir),
                     "enabled": True,
-                    "source": f"profile:{Path(profile_dir).name}",
+                    "source": f"profile:{profile_name}",
                 }
             )
-
-    # 2) 运行时内置包（可选）
-    if include_core:
-        core_root = profiles_root / "node_modules" / "@deepseek-ai"
-        if core_root.is_dir():
-            try:
-                core_dirs = sorted([c for c in core_root.iterdir() if c.is_dir()])
-            except Exception:  # noqa: BLE001
-                core_dirs = []
-            for c in core_dirs:
-                name = c.name
-                if not name.startswith("dsh-") and not name.startswith("cordis"):
-                    continue
-                key = f"@deepseek-ai/{name}"
-                if key in seen:
-                    continue
-                seen.add(key)
-                data = _read_package_json(c)
-                ver = data.get("version") or ""
-                size = dir_size(c, skip_dirs=("node_modules", ".git", ".pnpm"))
-                items.append(
-                    {
-                        "name": f"@deepseek-ai/{name}",
-                        "version": ver,
-                        "size": size,
-                        "size_text": human_size(size),
-                        "path": str(c),
-                        "enabled": False,
-                        "source": "运行时内置",
-                    }
-                )
-    return {"items": items, "total_items": len(items), "errors": errors}
+        else:  # core
+            c = Path(name)
+            data = _read_package_json(c)
+            ver = data.get("version") or ""
+            size = dir_size(c, skip_dirs=("node_modules", ".git", ".pnpm"))
+            items.append(
+                {
+                    "name": f"@deepseek-ai/{c.name}",
+                    "version": ver,
+                    "size": size,
+                    "size_text": human_size(size),
+                    "path": str(c),
+                    "enabled": False,
+                    "source": "运行时内置",
+                }
+            )
+        rep.step(name)
+    elapsed = time.monotonic() - start
+    # 按启用优先、名称排序，方便阅读
+    items.sort(key=lambda x: (not x["enabled"], x["name"].lower()))
+    return {
+        "items": items,
+        "total_items": len(items),
+        "errors": errors,
+        "elapsed": elapsed,
+        "speed": (len(items) / elapsed) if elapsed > 0 else 0.0,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -587,25 +645,42 @@ def parse_skill_version(skill_dir: Path) -> str | None:
     return None
 
 
-def scan_skills(root: Path | None = None) -> dict:
+def scan_skills(root: Path | None = None, on_progress=None) -> dict:
     """
     扫描技能目录。默认根为 %DSH_HOME%/skills（可用 DSH_SKILLS 环境变量覆盖）。
-    返回：{"items":[{name, version, size, size_text, path, has_skill_md}], ...}
+    返回：{"items":[{name, version, size, size_text, path, has_skill_md}],
+          "root": ..., "errors": [...], "elapsed": float, "speed": float(项/秒)}
+    on_progress(rep) —— 每个技能目录处理完后回调。
     """
+    start = time.monotonic()
     skills_root = Path(os.environ.get("DSH_SKILLS") or (root or DSH_HOME / "skills"))
     items = []
     errors = []
     if not skills_root.is_dir():
-        return {"items": [], "root": str(skills_root), "errors": ["技能目录不存在: " + str(skills_root)]}
+        return {
+            "items": [], "root": str(skills_root),
+            "errors": ["技能目录不存在: " + str(skills_root)],
+            "elapsed": 0.0, "speed": 0.0,
+        }
     try:
         entries = sorted([e for e in skills_root.iterdir()], key=lambda p: p.name.lower())
     except Exception as e:  # noqa: BLE001
-        return {"items": [], "root": str(skills_root), "errors": [str(e)]}
+        return {
+            "items": [], "root": str(skills_root), "errors": [str(e)],
+            "elapsed": 0.0, "speed": 0.0,
+        }
+    # 预筛候选（保持进度=已检查目录数）
+    candidates = []
     for e in entries:
+        if e.is_dir():
+            if (e / "SKILL.md").is_file() or (e / "README.md").is_file():
+                candidates.append(e)
+        elif e.suffix.lower() in (".md", ".markdown"):
+            candidates.append(e)
+    rep = ProgressReporter(on_progress, len(candidates), "skills")
+    for e in candidates:
         # 目录技能：含 SKILL.md（或本身就是技能目录）
         if e.is_dir():
-            if not ((e / "SKILL.md").is_file() or (e / "README.md").is_file()):
-                continue
             name = e.name
             ver = parse_skill_version(e) or ""
             size = dir_size(e, skip_dirs=("node_modules", ".git", ".pnpm", "node_modules.bak"))
@@ -620,7 +695,7 @@ def scan_skills(root: Path | None = None) -> dict:
                 }
             )
         # 平铺单文件技能（*.md）
-        elif e.suffix.lower() in (".md", ".markdown"):
+        else:
             name = e.stem
             size = e.stat().st_size if e.is_file() else 0
             items.append(
@@ -633,16 +708,65 @@ def scan_skills(root: Path | None = None) -> dict:
                     "has_skill_md": False,
                 }
             )
-    return {"items": items, "root": str(skills_root), "errors": errors}
+        rep.step(e.name)
+    elapsed = time.monotonic() - start
+    return {
+        "items": items,
+        "root": str(skills_root),
+        "errors": errors,
+        "elapsed": elapsed,
+        "speed": (len(items) / elapsed) if elapsed > 0 else 0.0,
+    }
 
 
 # ---------------------------------------------------------------------------
 # 下载 / 备份 / 替换
 # ---------------------------------------------------------------------------
-def download_file(url: str, dest: Path, log=print, timeout: float = 120.0) -> Path:
-    """流式下载到 dest，返回 dest。"""
+class _Throttle:
+    """限流：距上次触发超过 min_gap 秒 或 进度增量超过 min_step 才放行。"""
+
+    def __init__(self, min_gap: float = 0.3, min_step: float = 2.0):
+        self.min_gap = min_gap
+        self.min_step = min_step
+        self.last_t = 0.0
+        self.last_pct = -100.0
+
+    def allow(self, pct: float) -> bool:
+        now = time.monotonic()
+        if now - self.last_t >= self.min_gap or pct - self.last_pct >= self.min_step:
+            self.last_t = now
+            self.last_pct = pct
+            return True
+        return False
+
+
+def _fmt_eta(seconds: float) -> str:
+    if seconds < 0 or seconds != seconds:  # NaN
+        return "计算中…"
+    if seconds < 60:
+        return f"{seconds:.0f} 秒"
+    return f"{int(seconds // 60)} 分 {int(seconds % 60)} 秒"
+
+
+def _fmt_dl_progress(got: int, total: int, elapsed: float) -> str:
+    pct = (got / total * 100) if total else 0.0
+    remain = max(total - got, 0) if total else 0
+    speed = (got / elapsed) if elapsed > 1.0 else (got / max(elapsed, 1e-9))
+    eta = (remain / speed) if speed > 0 and total else 0.0
+    return (
+        f"已下载 {got / 1024 / 1024:.1f} / {total / 1024 / 1024:.1f} MB"
+        f"（{pct:.0f}%）｜剩余 {human_size(remain)}｜速度 {speed / 1024 / 1024:.2f} MB/s"
+        f"｜预计还需 {_fmt_eta(eta)}｜已用 {elapsed:.1f} 秒"
+    )
+
+
+def download_file(url: str, dest: Path, log=print, timeout: float = 120.0,
+                  progress_cb=None) -> Path:
+    """流式下载到 dest，返回 dest。进度行经 log 输出（限流），数值经 progress_cb 回调。"""
     req = urllib.request.Request(url, headers=UA)
     log(f"开始下载：{url}")
+    throttle = _Throttle(min_gap=0.4, min_step=5.0)
+    t0 = time.monotonic()
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         total = int(resp.headers.get("Content-Length") or 0)
         got = 0
@@ -655,16 +779,58 @@ def download_file(url: str, dest: Path, log=print, timeout: float = 120.0) -> Pa
                 fh.write(chunk)
                 got += len(chunk)
                 if total:
-                    log(f"下载中… {got / 1024 / 1024:.1f} / {total / 1024 / 1024:.1f} MB")
-    log(f"下载完成：{dest}（{human_size(got)}）")
+                    pct = got / total * 100
+                    if throttle.allow(pct):
+                        elapsed = time.monotonic() - t0
+                        log(f"[下载] {_fmt_dl_progress(got, total, elapsed)}")
+                    if progress_cb:
+                        progress_cb(min(pct / 100.0, 1.0))
+    if progress_cb:
+        progress_cb(1.0)
+    log(f"下载完成：{dest}（{human_size(got)}，用时 {time.monotonic() - t0:.1f} 秒）")
     return dest
 
 
-def _find_zip_root(zip_path: Path, extract_dir: Path, log=print) -> Path:
+def _extract_zip_with_progress(zip_path: Path, extract_dir: Path,
+                               log=print, progress_cb=None) -> None:
+    """逐文件解压，输出限流进度行。"""
+    with zipfile.ZipFile(zip_path) as zf:
+        infos = [i for i in zf.infolist() if not i.is_dir()]
+        total_bytes = sum(i.file_size for i in infos)
+        throttle = _Throttle(min_gap=0.3, min_step=5.0)
+        t0 = time.monotonic()
+        done_bytes = 0
+        done_files = 0
+        for info in infos:
+            try:
+                zf.extract(info, extract_dir)
+            except Exception as e:  # noqa: BLE001
+                log(f"解压跳过异常文件 {info.filename}: {e}")
+            done_bytes += info.file_size
+            done_files += 1
+            if total_bytes:
+                pct = done_bytes / total_bytes * 100
+                if throttle.allow(pct):
+                    elapsed = time.monotonic() - t0
+                    speed = (done_bytes / elapsed) if elapsed > 1.0 else (done_bytes / max(elapsed, 1e-9))
+                    eta = ((total_bytes - done_bytes) / speed) if speed > 0 else 0.0
+                    log(
+                        f"[解压] 文件 {done_files}/{len(infos)}｜"
+                        f"{done_bytes / 1024 / 1024:.1f}/{total_bytes / 1024 / 1024:.1f} MB"
+                        f"（{pct:.0f}%）｜速度 {speed / 1024 / 1024:.2f} MB/s"
+                        f"｜预计还需 {_fmt_eta(eta)}｜已用 {elapsed:.1f} 秒"
+                    )
+                if progress_cb:
+                    progress_cb(min(pct / 100.0, 1.0))
+        if progress_cb:
+            progress_cb(1.0)
+        log(f"解压完成：{done_files} 个文件，用时 {time.monotonic() - t0:.1f} 秒")
+
+
+def _find_zip_root(zip_path: Path, extract_dir: Path, log=print, progress_cb=None) -> Path:
     """解压 zip 并返回其中包含 dsh-root package.json 的顶层目录。"""
     log(f"解压中：{zip_path.name}")
-    with zipfile.ZipFile(zip_path) as zf:
-        zf.extractall(extract_dir)
+    _extract_zip_with_progress(zip_path, extract_dir, log=log, progress_cb=progress_cb)
     # 找 name == @deepseek-ai/dsh-root 的目录
     try:
         for child in extract_dir.iterdir():
@@ -699,6 +865,7 @@ def update_source_from_zip(
     log=print,
     keep_backup: bool = True,
     backup_root: Path | None = None,
+    progress_cb=None,
 ) -> dict:
     """
     下载官方源码 zip → 备份 → 整目录替换 target_dir（保留 node_modules/.git）。
@@ -711,6 +878,8 @@ def update_source_from_zip(
          备份完成后新建目标路径，再把 node_modules/.git 从备份目录移回，以加速 pnpm install
       5. 把解压出的新源码整体移入目标路径
       6. 可选：pnpm install
+
+    progress_cb(percent: float) —— 下载/解压阶段的 0.0~1.0 进度。
 
     返回：{"ok": bool, "new_version": str, "backup": str, "message": str}
     """
@@ -737,8 +906,10 @@ def update_source_from_zip(
     new_root = None
     try:
         # ---- 下载并解压 ----
-        download_file(ZIP_URL, zip_path, log=log)
-        new_root = _find_zip_root(zip_path, extract_dir, log=log)
+        download_file(ZIP_URL, zip_path, log=log, progress_cb=progress_cb)
+        new_root = _find_zip_root(zip_path, extract_dir, log=log, progress_cb=progress_cb)
+        if progress_cb:
+            progress_cb(1.0)
         new_version = _read_dir_version(new_root)
         log(f"官方源码版本：{new_version}（当前：{old_version or '未知'}）")
 
@@ -883,11 +1054,13 @@ def _selftest() -> int:
     for a, b in pairs:
         print(f"  {a} vs {b} -> {compare_versions(a, b)}")
 
-    print("\n[4] 插件扫描（启用 + 运行时内置）")
+    print("\n[4] 插件扫描（启用 + 运行时内置，含效率统计）")
     plugins = scan_plugins(include_core=True)
     enabled = [p for p in plugins["items"] if p["enabled"]]
     core = [p for p in plugins["items"] if not p["enabled"]]
-    print(f"  共 {len(plugins['items'])} 项：启用 {len(enabled)}，运行时内置 {len(core)}")
+    print(f"  共 {len(plugins['items'])} 项：启用 {len(enabled)}，运行时内置 {len(core)}"
+          f"｜用时 {plugins.get('elapsed', 0):.2f}s｜"
+          f"约 {plugins.get('speed', 0):.1f} 项/秒")
     for p in enabled[:12]:
         print(f"  ✔ {p['name']}  v{p['version'] or '?'}  {p['size_text']}")
     if len(enabled) > 12:
@@ -895,16 +1068,26 @@ def _selftest() -> int:
     for e in plugins.get("errors", [])[:5]:
         print(f"  ! {e}")
 
-    print("\n[5] 技能扫描")
+    print("\n[5] 技能扫描（含效率统计）")
     skills = scan_skills()
     print(f"  技能目录：{skills.get('root')}")
-    print(f"  技能数量：{len(skills['items'])}")
+    print(f"  技能数量：{len(skills['items'])}"
+          f"｜用时 {skills.get('elapsed', 0):.2f}s｜"
+          f"约 {skills.get('speed', 0):.1f} 项/秒")
     for s in skills["items"][:8]:
         print(f"  • {s['name']}  v{s['version'] or '-'}  {s['size_text']}")
     if len(skills["items"]) > 8:
         print(f"  … 其余 {len(skills['items']) - 8} 项")
     for e in skills.get("errors", []):
         print(f"  ! {e}")
+
+    print("\n[5b] 进度回调演示（skills 前 5 项）")
+    counts = {"n": 0}
+    def _cb(rep):
+        counts["n"] += 1
+        if counts["n"] <= 5:
+            print(f"    progress done={rep['done']}/{rep['total']} current={rep.get('current','')}")
+    scan_skills(on_progress=_cb)
 
     print("\n[6] zip 可达性（仅探测，不下载）")
     try:

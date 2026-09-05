@@ -23,10 +23,11 @@ APP_TITLE = "DeepSeek Harness 自动检测与更新器"
 # 后台任务辅助：把耗时操作放进线程，日志经 queue 送回主线程
 # ---------------------------------------------------------------------------
 class Worker:
-    def __init__(self, on_log, on_finish):
+    def __init__(self, on_log, on_finish, on_progress=None):
         self.q: queue.Queue = queue.Queue()
         self.on_log = on_log
         self.on_finish = on_finish
+        self.on_progress = on_progress
         self._thread: threading.Thread | None = None
 
     def start(self, fn, *args):
@@ -42,6 +43,13 @@ class Worker:
         self._thread = threading.Thread(target=runner, daemon=True)
         self._thread.start()
 
+    # ---- 供工作线程调用的线程安全发射器（把消息送回主线程 queue） ----
+    def emit_log(self, msg: str):
+        self.q.put(("log", str(msg), None))
+
+    def emit_progress(self, value: float):
+        self.q.put(("progress", float(value), None))
+
     def pump(self):
         """由 root.after 周期调用。"""
         got_finish = False
@@ -50,6 +58,9 @@ class Worker:
                 kind, payload, err = self.q.get_nowait()
                 if kind == "log":
                     self.on_log(payload)
+                elif kind == "progress":
+                    if self.on_progress:
+                        self.on_progress(payload)
                 elif kind == "finish":
                     got_finish = True
                     self.on_finish(payload, err)
@@ -140,6 +151,14 @@ class UpdaterApp:
         self.btn_settings = ttk.Button(btns, text="⚙ 数据目录", command=self.show_settings)
         self.btn_settings.pack(side="right", padx=8)
 
+        # ── 当前操作进度横幅（扫描/下载/更新通用） ──
+        progframe = ttk.Frame(self.root)
+        progframe.pack(fill="x", padx=10, pady=(2, 0))
+        self.prog = ttk.Progressbar(progframe, mode="determinate", maximum=1000)
+        self.prog.pack(side="left", fill="x", expand=True)
+        self.lbl_progress = ttk.Label(progframe, text="等待任务…", width=58, anchor="e")
+        self.lbl_progress.pack(side="right", padx=(8, 0))
+
         # ── 日志区 ──
         logframe = ttk.LabelFrame(self.root, text="日志 / 进度")
         logframe.pack(fill="both", expand=True, padx=10, pady=6)
@@ -163,6 +182,22 @@ class UpdaterApp:
 
     def _set_status(self, text: str):
         self.status.configure(text=text)
+
+    # ---------------- 进度横幅 ----------------
+    def _prog_reset(self, text: str = ""):
+        self.prog.configure(value=0)
+        self.lbl_progress.configure(text=text or "准备中…")
+
+    def _prog_set(self, value: float, text: str | None = None):
+        """value 0.0~1.0；text 留空则自动显示百分比。"""
+        self.prog.configure(value=int(max(0.0, min(value, 1.0)) * 1000))
+        if text is None:
+            text = f"进度：{value * 100:.1f}%"
+        self.lbl_progress.configure(text=text)
+
+    def _prog_done(self, text: str = "完成"):
+        self.prog.configure(value=1000)
+        self.lbl_progress.configure(text=text)
 
     # ---------------- 按钮状态 ----------------
     def _set_busy(self, busy: bool):
@@ -264,9 +299,12 @@ class UpdaterApp:
             return
         self._set_busy(True)
         self._set_status("正在通过 npm 更新全局安装…")
+        self._prog_reset("npm install -g @deepseek-ai/dsh@latest")
         worker = Worker(self._log, self._on_npm_update_done)
         self._worker = worker
-        worker.start(core.update_npm_global, Path(inst["path"]))
+        worker.start(
+            lambda: core.update_npm_global(Path(inst["path"]), log=worker.emit_log)
+        )
         self._poll(worker)
 
     def _on_npm_update_done(self, result, err):
@@ -274,9 +312,11 @@ class UpdaterApp:
         if err is not None:
             messagebox.showerror(APP_TITLE, f"npm 更新失败：\n{err}")
             self._set_status("npm 更新失败")
+            self._prog_reset("npm 更新失败")
             return
         messagebox.showinfo(APP_TITLE, result.get("message", "npm 更新完成"))
         self._set_status("npm 更新完成")
+        self._prog_done("npm 更新完成")
         self.refresh_all()
 
     def _confirm_source_update(self, inst):
@@ -320,30 +360,46 @@ class UpdaterApp:
             return
         self._set_busy(True)
         self._set_status("正在下载并替换源码…")
-        worker = Worker(self._log, self._on_source_update_done)
+        self._prog_reset("准备下载官方源码…")
+        worker = Worker(self._log, self._on_source_update_done, on_progress=self._on_update_progress)
         self._worker = worker
         run_pnpm = self.var_pnpm.get()
         worker.start(
-            core.update_source_from_zip, Path(inst["path"]), run_pnpm
+            lambda: core.update_source_from_zip(
+                Path(inst["path"]),
+                run_pnpm,
+                log=worker.emit_log,
+                progress_cb=worker.emit_progress,
+            )
         )
         self._poll(worker)
+
+    def _on_update_progress(self, value: float):
+        """主窗口进度横幅：value 0.0~1.0（下载/解压阶段）。"""
+        try:
+            self._prog_set(value, text=f"更新进度：{value * 100:.1f}%")
+        except tk.TclError:
+            pass
 
     def _on_source_update_done(self, result, err):
         self._set_busy(False)
         if err is not None:
             messagebox.showerror(APP_TITLE, f"更新失败：\n{err}")
             self._set_status("更新失败")
+            self._prog_reset("更新失败")
             return
         msg = result.get("message", "更新完成")
         if result.get("backup"):
             msg += f"\n\n原目录备份于：\n{result['backup']}"
         messagebox.showinfo(APP_TITLE, msg)
         self._set_status("更新完成")
+        self._prog_done("更新完成")
         self.refresh_all()
 
     # ---------------- 插件 / 技能窗口 ----------------
     def open_plugins(self):
         self._open_inventory_window(
+            name="插件",
             title="🧩 DeepSeek Harness 插件检测",
             columns=(("name", "名称"), ("version", "版本"), ("size", "大小"),
                      ("enabled", "启用"), ("source", "来源")),
@@ -357,6 +413,7 @@ class UpdaterApp:
 
     def open_skills(self):
         self._open_inventory_window(
+            name="技能",
             title="📚 DeepSeek Harness 技能检测",
             columns=(("name", "名称"), ("version", "版本"), ("size", "大小")),
             widths=(330, 110, 110),
@@ -366,14 +423,22 @@ class UpdaterApp:
             detail_of=lambda it: it["path"],
         )
 
-    def _open_inventory_window(self, title, columns, widths, scan_fn, scan_kwargs,
+    def _open_inventory_window(self, name, title, columns, widths, scan_fn, scan_kwargs,
                                row_of, detail_of):
         win = tk.Toplevel(self.root)
         win.title(title)
-        win.geometry("900x560")
+        win.geometry("920x600")
         win.transient(self.root)
-        lbl = ttk.Label(win, text="扫描中…", foreground="#0a58ca")
-        lbl.pack(anchor="w", padx=10, pady=(8, 0))
+
+        # ── 顶部：标题 + 进度条 + 效率标签 ──
+        head = ttk.Frame(win)
+        head.pack(fill="x", padx=10, pady=(8, 0))
+        lbl = ttk.Label(head, text="正在扫描…", foreground="#0a58ca")
+        lbl.pack(anchor="w")
+        bar = ttk.Progressbar(head, mode="determinate", maximum=1000)
+        bar.pack(fill="x", pady=(4, 2))
+        lbl_prog = ttk.Label(head, text="", foreground="#333")
+        lbl_prog.pack(anchor="w")
 
         frm = ttk.Frame(win)
         frm.pack(fill="both", expand=True, padx=10, pady=6)
@@ -395,14 +460,50 @@ class UpdaterApp:
 
         status = ttk.Label(win, text="", relief="sunken", anchor="w")
         status.pack(fill="x", side="bottom")
-        bar = ttk.Progressbar(win, mode="indeterminate")
-        bar.pack(fill="x", padx=10, pady=(0, 6))
-        bar.start(10)
+
+        state = {"last_log_pct": -1}
+
+        def on_progress(rep: dict):
+            """rep: {phase,done,total,current,elapsed} —— 每处理完一项回调。"""
+            try:
+                done = rep.get("done", 0)
+                total = rep.get("total", 0) or 1
+                elapsed = rep.get("elapsed", 0.0)
+                current = rep.get("current", "") or ""
+                pct = done / total
+                bar.configure(value=int(pct * 1000))
+                speed = (done / elapsed) if elapsed > 0.05 else float("nan")
+                if speed == speed:  # 非 NaN
+                    remain = (total - done) / speed if speed > 0 else 0.0
+                    speed_txt = f"{speed:.0f} 项/秒"
+                    eta_txt = core._fmt_eta(remain) if remain > 0 else "即将完成"
+                else:
+                    speed_txt, eta_txt = "计算中…", "计算中…"
+                lbl_prog.configure(
+                    text=f"已检测 {done}/{total} 项（{pct * 100:.1f}%）｜当前：{current or '—'}"
+                         f"｜{speed_txt}｜已用 {elapsed:.1f} 秒｜预计还需 {eta_txt}"
+                )
+                # 主窗口日志按 10% 一档汇报（避免刷屏）
+                mark = int(pct * 100 / 10)
+                if mark > state["last_log_pct"]:
+                    state["last_log_pct"] = mark
+                    self._log(f"📊 [{name}检测] 进度 {pct * 100:.0f}%"
+                              f"（{done}/{total}）｜{speed_txt}｜已用 {elapsed:.1f}s")
+            except tk.TclError:
+                pass  # 窗口已关闭
 
         def fill(result):
             try:
-                bar.stop()
-                bar.pack_forget()
+                bar.configure(value=1000)
+                # 保留进度条显示 100%，仅更新标签
+                elapsed = result.get("elapsed", 0.0)
+                speed = result.get("speed", 0.0)
+                if elapsed:
+                    lbl_prog.configure(
+                        text=f"✔ 完成（用时 {elapsed:.2f} 秒，平均 {speed:.1f} 项/秒）"
+                    )
+                else:
+                    lbl_prog.configure(text="✔ 完成")
             except tk.TclError:
                 return  # 窗口已被关闭
             items = result.get("items", [])
@@ -413,19 +514,31 @@ class UpdaterApp:
             errs = result.get("errors") or []
             if root:
                 lbl.configure(text=f"扫描目录：{root}")
+            else:
+                lbl.configure(text="扫描完成")
             if errs:
                 lbl.configure(text=(lbl.cget("text") + "    ⚠ 部分项解析失败，见列表空白行"))
             total_size = sum(it.get("size", 0) for it in items)
-            status.configure(text=f"共 {len(items)} 项    合计 {core.human_size(total_size)}    "
-                                 f"双击行可打开所在路径")
+            eff = f"共 {len(items)} 项    合计 {core.human_size(total_size)}"
+            if elapsed:
+                eff += f"    用时 {elapsed:.2f} 秒"
+            if speed:
+                eff += f"    平均 {speed:.1f} 项/秒"
+            eff += "    双击行可打开所在路径"
+            status.configure(text=eff)
+            self._log(f"✅ [{name}检测] 完成：{len(items)} 项，合计 {core.human_size(total_size)}，"
+                      f"用时 {elapsed:.2f}s（{speed:.1f} 项/秒）")
+
+        worker = Worker(on_log=lambda m: None, on_finish=fill, on_progress=on_progress)
 
         def scan():
             try:
-                return scan_fn(**scan_kwargs)
+                return scan_fn(**scan_kwargs,
+                               on_progress=lambda rep: worker.q.put(("progress", rep)))
             except Exception as e:  # noqa: BLE001
-                return {"items": [], "errors": [str(e)]}
+                return {"items": [], "errors": [str(e)],
+                        "elapsed": 0.0, "speed": 0.0}
 
-        worker = Worker(on_log=lambda m: None, on_finish=fill)
         worker.start(scan)
         win.after(120, lambda: self._poll_window(worker, win))
 
