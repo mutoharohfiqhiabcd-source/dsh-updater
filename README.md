@@ -20,13 +20,15 @@
 | 其它依赖 | 无 —— 全部使用 Python 标准库，无需 pip 安装任何第三方库 |
 | 网络 | 需要能访问 GitHub（对比官方版本 / 下载更新） |
 
-### 方式一：下载 ZIP（推荐，无需 git）
+### 方式一：下载exe版本
+
+### 方式二：下载 ZIP（推荐，无需 git）
 1. 打开本仓库页面：<https://github.com/mutoharohfiqhiabcd-source/dsh-updater>
 2. 点击绿色按钮 **Code → Download ZIP**；
 3. 解压到任意目录（例如 `D:\dsh-updater`）；
 4. 双击 **`启动更新器.bat`** 即可运行（无控制台窗口）。
 
-### 方式二：git clone（适合关注后续更新）
+### 方式三：git clone（适合关注后续更新）
 ```bat
 git clone https://github.com/mutoharohfiqhiabcd-source/dsh-updater.git
 cd dsh-updater
@@ -34,7 +36,7 @@ cd dsh-updater
 ```
 > 后续更新：在目录内执行 `git pull` 即可获取最新版本。
 
-### 方式三：已有旧版 / 从本仓库更新
+### 方式四：已有旧版 / 从本仓库更新
 如果您已经有一份本地拷贝（例如通过本工具或直接复制），只需用新文件覆盖即可：
 ```bat
 copy /Y updater_gui.pyw updater_core.py dsh_updater.ico 目标目录\
