@@ -786,6 +786,18 @@ def human_size(n: int) -> str:
     return f"{n / 1024 ** 3:.2f} GB"
 
 
+def dir_created_text(path: Path) -> str:
+    """目录创建（安装）时间文本；失败返回空串。ctime 在 Windows 表示创建时间。"""
+    try:
+        st = os.stat(path)
+        ts = getattr(st, "st_ctime", 0)
+        if not ts:
+            ts = st.st_mtime
+        return datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 # ---------------------------------------------------------------------------
 # 插件检测
 # ---------------------------------------------------------------------------
@@ -958,6 +970,7 @@ def scan_plugins(include_core: bool = True, on_progress=None) -> dict:
                     "path": str(pkg_dir),
                     "enabled": True,
                     "source": f"profile:{profile_name}",
+                    "installed": dir_created_text(pkg_dir),
                 }
             )
         else:  # core
@@ -976,6 +989,7 @@ def scan_plugins(include_core: bool = True, on_progress=None) -> dict:
                     "path": str(c),
                     "enabled": False,
                     "source": "运行时内置",
+                    "installed": dir_created_text(c),
                 }
             )
         rep.step(name)
@@ -1099,6 +1113,7 @@ def scan_skills(root: Path | None = None, on_progress=None) -> dict:
                     "size_text": human_size(size),
                     "path": str(e),
                     "has_skill_md": (e / "SKILL.md").is_file(),
+                    "installed": dir_created_text(e),
                 }
             )
         # 平铺单文件技能（*.md）
@@ -1114,6 +1129,7 @@ def scan_skills(root: Path | None = None, on_progress=None) -> dict:
                     "size_text": human_size(size),
                     "path": str(e),
                     "has_skill_md": False,
+                    "installed": dir_created_text(e),
                 }
             )
         rep.step(e.name)
@@ -1129,6 +1145,112 @@ def scan_skills(root: Path | None = None, on_progress=None) -> dict:
         "speed": (len(items) / elapsed) if elapsed > 0 else 0.0,
         "selfcheck": {"duplicates": dedup_skills["removed"]},
     }
+
+
+# ---------------------------------------------------------------------------
+# 检测最新版本 / 同步更新（插件 & 技能）
+# ---------------------------------------------------------------------------
+def check_plugin_latest(names: list, on_progress=None) -> dict:
+    """
+    对插件名列表查询官方最新版：
+    - @deepseek-ai/* 与可在 npm registry 找到的包 → npm dist-tags.latest
+    - 查询失败则 latest=None。
+    返回 {name: {"latest": str|None, "error": str|None}}
+    """
+    result = {}
+    rep = ProgressReporter(on_progress, len(names), "plugin-latest")
+    for name in names:
+        rep.announce(f"查询 {name} 最新版…")
+        latest, err = None, None
+        try:
+            from urllib.parse import quote
+            enc = quote(name, safe="")  # @scope/name → URL 编码
+            data = http_get_json(f"https://registry.npmjs.org/{enc}/latest", timeout=15)
+            latest = (data or {}).get("version")
+            if not latest:
+                err = "npm 无该包"
+        except Exception as e:  # noqa: BLE001
+            err = str(e)[:80]
+        result[name] = {"latest": latest, "error": err}
+        rep.step(name)
+    rep.finish()
+    return result
+
+
+def check_skill_latest(skill_items: list, on_progress=None) -> dict:
+    """
+    对技能条目查询来源的最新版本：
+    - 目录含 .git 且有 origin → 用 git ls-remote 对比当前 HEAD 的最近 tag
+    - 否则（本机为拷贝安装）→ 无法自动判定，返回 latest=None, error='本地副本（无 git 来源）'
+    返回 {name: {"latest": str|None, "error": str|None, "git_ok": bool}}
+    """
+    result = {}
+    rep = ProgressReporter(on_progress, len(skill_items), "skill-latest")
+    for it in skill_items:
+        name = it.get("name", "")
+        path = Path(it.get("path", ""))
+        rep.announce(f"检查技能 {name} 来源…")
+        latest, err, git_ok = None, None, False
+        if (path / ".git").is_dir():
+            git_ok = True
+            # 找最近 tag：ls-remote --tags origin
+            try:
+                r = subprocess.run(
+                    ["git", "-C", str(path), "ls-remote", "--tags", "origin"],
+                    capture_output=True, text=True, timeout=30,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+                if r.returncode == 0:
+                    tags = []
+                    for line in r.stdout.splitlines():
+                        parts = line.split("\t")
+                        if len(parts) == 2 and parts[1].endswith("^{}"):
+                            continue
+                        ref = parts[1].split("/")[-1] if len(parts) == 2 else ""
+                        ref = ref.lstrip("v")
+                        if re.match(r"^\d+\.\d+", ref):
+                            tags.append(ref)
+                    if tags:
+                        tags.sort(key=version_key)
+                        latest = tags[-1]
+                    else:
+                        err = "远端无版本 tag"
+                else:
+                    err = "git ls-remote 失败"
+            except Exception as e:  # noqa: BLE001
+                err = str(e)[:80]
+        else:
+            err = "本地副本（无 git 来源，无法自动检测）"
+        result[name] = {"latest": latest, "error": err, "git_ok": git_ok}
+        rep.step(name)
+    rep.finish()
+    return result
+
+
+def update_skills_git(skill_items: list, log=print) -> dict:
+    """对有 git 来源的技能执行 git pull（同步更新）；返回统计。"""
+    ok, failed, skipped = [], [], 0
+    for it in skill_items:
+        path = Path(it.get("path", ""))
+        if not (path / ".git").is_dir():
+            skipped += 1
+            continue
+        log(f"更新技能 {it.get('name', '')}…")
+        try:
+            r = subprocess.run(
+                ["git", "-C", str(path), "pull", "--ff-only"],
+                capture_output=True, text=True, timeout=120,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            if r.returncode == 0:
+                ok.append(it.get("name", ""))
+                log(f"  ✔ {it.get('name', '')} 已更新")
+            else:
+                failed.append((it.get("name", ""), r.stderr.strip()[:120]))
+                log(f"  ✖ {it.get('name', '')}: {r.stderr.strip()[:120]}")
+        except Exception as e:  # noqa: BLE001
+            failed.append((it.get("name", ""), str(e)[:120]))
+    return {"ok": ok, "failed": failed, "skipped": skipped}
 
 
 # ---------------------------------------------------------------------------

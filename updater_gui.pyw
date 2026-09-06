@@ -18,6 +18,7 @@ from pathlib import Path
 import updater_core as core
 
 APP_TITLE = "DeepSeek Harness 自动检测与更新器"
+APP_VERSION = "0.6.7"
 
 
 def resource_path(name: str) -> str:
@@ -35,25 +36,46 @@ def app_dir() -> Path:
     return Path(__file__).resolve().parent
 
 # ---------------------------------------------------------------------------
-# 主题色板（美工）
+# 主题色板（美工）—— 浅色 / 深色两套
 # ---------------------------------------------------------------------------
-CLR = {
-    "bg": "#f2f5f9",
-    "panel": "#ffffff",
-    "panel_line": "#d7dee8",
-    "accent": "#0b57d0",
-    "accent_hover": "#0842a0",
-    "accent_fg": "#ffffff",
-    "text": "#1c2733",
-    "text_dim": "#5a6a7a",
-    "ok": "#1a7f37",
-    "warn": "#b35900",
-    "err": "#c5221f",
-    "heading_bg": "#dfe8f6",
-    "heading_fg": "#12315f",
-    "log_bg": "#0f1722",
-    "log_fg": "#d7e1ee",
+THEMES = {
+    "light": {
+        "bg": "#f2f5f9", "panel": "#ffffff", "panel_line": "#d7dee8",
+        "accent": "#0b57d0", "accent_hover": "#0842a0", "accent_fg": "#ffffff",
+        "text": "#1c2733", "text_dim": "#5a6a7a",
+        "ok": "#1a7f37", "warn": "#b35900", "err": "#c5221f",
+        "heading_bg": "#dfe8f6", "heading_fg": "#12315f",
+        "log_bg": "#0f1722", "log_fg": "#d7e1ee",
+        "status_bg": "#e4ebf5",
+        "row_bg": {
+            "update": "#fff3e0", "ok": "#e8f5e9", "err": "#fdecea",
+            "dim": "#f4f6f9", "candidate": "#fff8e1", "prerelease": "#f3e5f5",
+            "unstable": "#fce4ec",
+        },
+        "tree_bg": "#ffffff", "tree_sel": "#cfe0f7",
+    },
+    "dark": {
+        "bg": "#12161c", "panel": "#1b2129", "panel_line": "#2d3742",
+        "accent": "#4f8cff", "accent_hover": "#3a74e0", "accent_fg": "#ffffff",
+        "text": "#dfe6ee", "text_dim": "#93a1af",
+        "ok": "#4caf7d", "warn": "#e0a54f", "err": "#ef6b62",
+        "heading_bg": "#232c37", "heading_fg": "#b7c9e4",
+        "log_bg": "#0a0d12", "log_fg": "#c3d0de",
+        "status_bg": "#232c37",
+        "row_bg": {
+            "update": "#3a2f16", "ok": "#17301f", "err": "#3a1c1c",
+            "dim": "#232a33", "candidate": "#3a3118", "prerelease": "#2e2140",
+            "unstable": "#451726",
+        },
+        "tree_bg": "#171d25", "tree_sel": "#27466e",
+    },
 }
+
+CLR = dict(THEMES["light"])
+
+# 插件窗口（暗绿）与技能窗口（暗紫）独立强调色
+ACCENT_PLUGIN = {"light": "#1e7d3c", "dark": "#5bc078"}
+ACCENT_SKILL = {"light": "#6a1b9a", "dark": "#bb86fc"}
 
 # 各安装类型在此程序浮窗中的说明
 KIND_INFO = {
@@ -158,7 +180,7 @@ class Worker:
 class UpdaterApp:
     def __init__(self, root: tk.Tk):
         self.root = root
-        root.title(APP_TITLE)
+        root.title(f"{APP_TITLE} v{APP_VERSION}")
         root.geometry("1020x660")
         root.minsize(860, 560)
 
@@ -176,6 +198,13 @@ class UpdaterApp:
         self.official = None
         self.busy = False
         self._after_id = None
+        self._dark = False                 # 当前主题（False=浅色）
+        self._tree_tags_applied = False
+        self.style = ttk.Style(root)
+        try:
+            self.style.theme_use("clam")
+        except Exception:  # noqa: BLE001
+            pass
 
         # 应用图标（开发时与脚本同目录；PyInstaller 打包后内置在 exe 资源中）
         self._icon_path = str(resource_path("dsh_updater.ico"))
@@ -201,12 +230,7 @@ class UpdaterApp:
             pass
 
     def _setup_style(self):
-        """统一美工：配色 / 字体 / 组件样式。"""
-        self.style = ttk.Style(self.root)
-        try:
-            self.style.theme_use("clam")
-        except Exception:  # noqa: BLE001
-            pass
+        """统一美工：配色 / 字体 / 组件样式（读当前 CLR，可重复调用以切换主题）。"""
         s = self.style
         s.configure(".", background=CLR["bg"], foreground=CLR["text"],
                     font=("Microsoft YaHei UI", 10))
@@ -223,45 +247,71 @@ class UpdaterApp:
         s.configure("Dim.TLabel", background=CLR["panel"], foreground=CLR["text_dim"])
 
         # 按钮
+        btn_active = CLR["accent_hover"] if not self._dark else "#2b3d5e"
         s.configure("TButton", background=CLR["panel"], foreground=CLR["text"],
                     bordercolor=CLR["panel_line"], focusthickness=0, padding=(14, 6))
-        s.map("TButton", background=[("active", "#e6edf7"), ("pressed", "#d5e1f2")])
+        s.map("TButton", background=[("active", btn_active), ("pressed", "#c8d2e0")],
+              foreground=[("active", CLR["text"])])
         s.configure("Accent.TButton", background=CLR["accent"], foreground=CLR["accent_fg"],
                     bordercolor=CLR["accent"], padding=(16, 7))
         s.map("Accent.TButton",
               background=[("active", CLR["accent_hover"]), ("pressed", CLR["accent_hover"]),
-                          ("disabled", "#9db8e2")],
-              foreground=[("disabled", "#eef2f9")])
+                          ("disabled", "#5a6f92")],
+              foreground=[("disabled", "#c7d2e0")])
         s.configure("Warn.TButton", background="#e8710a", foreground="#ffffff",
                     bordercolor="#e8710a", padding=(16, 7))
         s.map("Warn.TButton", background=[("active", "#cf6407"), ("disabled", "#f0b98a")],
               foreground=[("disabled", "#ffffff")])
 
         # 进度条
-        s.configure("TProgressbar", background=CLR["accent"], troughcolor="#dfe6f0",
+        s.configure("TProgressbar", background=CLR["accent"], troughcolor=CLR["panel_line"],
                     bordercolor=CLR["bg"], lightcolor=CLR["accent"], darkcolor=CLR["accent"])
 
         # Treeview
-        s.configure("Treeview", background="#ffffff", fieldbackground="#ffffff",
+        s.configure("Treeview", background=CLR["tree_bg"], fieldbackground=CLR["tree_bg"],
                     foreground=CLR["text"], rowheight=30, bordercolor=CLR["panel_line"])
-        s.map("Treeview", background=[("selected", "#cfe0f7")],
+        s.map("Treeview", background=[("selected", CLR["tree_sel"])],
               foreground=[("selected", CLR["text"])])
         s.configure("Treeview.Heading", background=CLR["heading_bg"],
                     foreground=CLR["heading_fg"], padding=(8, 6),
                     font=("Microsoft YaHei UI", 10, "bold"))
-        s.map("Treeview.Heading", background=[("active", "#cddbf0")])
+        s.map("Treeview.Heading", background=[("active", CLR["heading_bg"])])
 
         # 滚动条
-        s.configure("Vertical.TScrollbar", background="#b9c6d6", troughcolor=CLR["bg"],
-                    bordercolor=CLR["bg"], arrowcolor="#5a6a7a")
-        s.configure("Horizontal.TScrollbar", background="#b9c6d6", troughcolor=CLR["bg"],
-                    bordercolor=CLR["bg"], arrowcolor="#5a6a7a")
+        s.configure("Vertical.TScrollbar", background=CLR["panel_line"], troughcolor=CLR["bg"],
+                    bordercolor=CLR["bg"], arrowcolor=CLR["text_dim"])
+        s.configure("Horizontal.TScrollbar", background=CLR["panel_line"], troughcolor=CLR["bg"],
+                    bordercolor=CLR["bg"], arrowcolor=CLR["text_dim"])
         s.configure("TCheckbutton", background=CLR["panel"], foreground=CLR["text"])
 
-        # 状态 tag 颜色（Treeview 行内使用）
-        for tag, col in STATUS_TAG.items():
-            self.tree_tags = getattr(self, "tree_tags", {})
-            self.tree_tags[tag] = col
+        # 状态/性质 tag（行前景 + 行背景）
+        row_bg = CLR["row_bg"]
+        if hasattr(self, "tree"):
+            for tag, col in STATUS_TAG.items():
+                self.tree.tag_configure(tag, foreground=col,
+                                        background=row_bg.get(tag, CLR["tree_bg"]))
+        self._tree_tags_applied = True
+
+    def toggle_theme(self):
+        """深色 / 浅色主题切换。"""
+        self._dark = not self._dark
+        CLR.clear()
+        CLR.update(THEMES["dark" if self._dark else "light"])
+        # ttk 主题刷新
+        self._setup_style()
+        # 原生控件颜色刷新
+        try:
+            self.root.configure(bg=CLR["bg"])
+            self.txt.configure(bg=CLR["log_bg"], fg=CLR["log_fg"])
+            self.status.configure(bg=CLR["status_bg"])
+            self.lbl_github.configure(background=CLR["panel"],
+                                      foreground=CLR["accent"])
+            self.lbl_npm.configure(background=CLR["panel"])
+        except Exception:  # noqa: BLE001
+            pass
+        self.btn_theme.configure(
+            text="🌙 深色模式" if not self._dark else "☀️ 浅色模式")
+        self._log(f"已切换到{'深色' if self._dark else '浅色'}主题。")
 
     def _build_ui(self):
         self.root.configure(bg=CLR["bg"])
@@ -332,6 +382,8 @@ class UpdaterApp:
         self.btn_settings.pack(side="right", padx=(8, 0))
         self.btn_export = ttk.Button(btns, text="💾 导出 CSV", command=self.export_csv)
         self.btn_export.pack(side="right")
+        self.btn_theme = ttk.Button(btns, text="🌙 深色模式", command=self.toggle_theme)
+        self.btn_theme.pack(side="right", padx=(0, 8))
 
         # ── 当前操作进度横幅（扫描/下载/更新通用） ──
         progframe = ttk.LabelFrame(self.root, text="当前任务")
@@ -655,60 +707,101 @@ class UpdaterApp:
 
     # ---------------- 插件 / 技能窗口 ----------------
     def open_plugins(self):
+        """插件窗口 —— 暗绿主题：检测最新版走 npm，同步更新支持 git/npm 源插件。"""
+        accent = ACCENT_PLUGIN["dark" if self._dark else "light"]
         self._open_inventory_window(
             name="插件",
             title="🧩 DeepSeek Harness 插件检测",
             reopen=self.open_plugins,
+            accent=accent,
+            accent_label="暗绿主题",
             columns=(("name", "名称"), ("version", "版本"), ("size", "大小"),
-                     ("enabled", "启用"), ("source", "来源")),
-            widths=(330, 110, 96, 58, 150),
+                     ("installed", "安装时间"), ("latest", "最新版"), ("enabled", "启用"),
+                     ("source", "来源")),
+            widths=(300, 88, 84, 120, 84, 58, 120),
             scan_fn=core.scan_plugins,
             scan_kwargs={},
             row_of=lambda it: (it["name"], it["version"] or "—", it["size_text"],
+                               it.get("installed") or "—", "—",
                                "✔ 启用" if it["enabled"] else "内置", it["source"]),
             detail_of=lambda it: it["path"],
+            latest_fn=core.check_plugin_latest,
+            update_fn=None,  # 插件更新=更新对应 dsh/运行时，见 update_selected
+            update_label="⬇ 同步更新",
         )
 
     def open_skills(self):
+        """技能窗口 —— 暗紫主题：检测最新版走 git 来源，可同步 git pull。"""
+        accent = ACCENT_SKILL["dark" if self._dark else "light"]
         self._open_inventory_window(
             name="技能",
             title="📚 DeepSeek Harness 技能检测",
             reopen=self.open_skills,
-            columns=(("name", "名称"), ("version", "版本"), ("size", "大小")),
-            widths=(330, 120, 120),
+            accent=accent,
+            accent_label="暗紫主题",
+            columns=(("name", "名称"), ("version", "版本"), ("size", "大小"),
+                     ("installed", "安装时间"), ("latest", "最新版")),
+            widths=(300, 100, 96, 122, 100),
             scan_fn=core.scan_skills,
             scan_kwargs={},
-            row_of=lambda it: (it["name"], it["version"] or "—", it["size_text"]),
+            row_of=lambda it: (it["name"], it["version"] or "—", it["size_text"],
+                               it.get("installed") or "—", "—"),
             detail_of=lambda it: it["path"],
+            latest_fn=core.check_skill_latest,
+            update_fn=core.update_skills_git,
+            update_label="⬇ git 同步更新",
         )
 
-    def _open_inventory_window(self, name, title, reopen, columns, widths,
-                               scan_fn, scan_kwargs, row_of, detail_of):
+    def _open_inventory_window(self, name, title, reopen, accent, accent_label,
+                               columns, widths, scan_fn, scan_kwargs, row_of,
+                               detail_of, latest_fn=None, update_fn=None,
+                               update_label=None):
         win = tk.Toplevel(self.root)
-        win.title(title)
-        win.geometry("940x620")
+        win.title(f"{title} · {APP_VERSION} · {accent_label}")
+        win.geometry("1080x640")
         self._apply_icon(win)
         win.transient(self.root)
         win.configure(bg=CLR["bg"])
 
-        # ── 顶部：标题 + 进度条 + 效率标签 ──
+        # 自定义强调样式（插件=暗绿 / 技能=暗紫）
+        accent_style = f"{name}.Accent.TButton"
+        s = ttk.Style(win)
+        s.configure(accent_style, background=accent, foreground="#ffffff",
+                    bordercolor=accent, padding=(12, 6))
+        s.map(accent_style, background=[("active", accent), ("disabled", "#8a9aa8")],
+              foreground=[("disabled", "#ffffff")])
+
+        # ── 顶部：标题 + 动作按钮 + 进度条 ──
         head = ttk.Frame(win)
         head.pack(fill="x", padx=10, pady=(10, 0))
         toprow = ttk.Frame(head)
         toprow.pack(fill="x")
-        lbl = ttk.Label(toprow, text="正在扫描…", foreground=CLR["accent"],
+        lbl = ttk.Label(toprow, text="正在扫描…", foreground=accent,
                         font=("Microsoft YaHei UI", 10, "bold"))
         lbl.pack(side="left")
-        btn_rescan = ttk.Button(toprow, text="↻ 重新扫描", command=lambda: self._rescan(win, reopen))
-        btn_rescan.pack(side="right")
+        # 操作按钮组（右）
+        right = ttk.Frame(toprow)
+        right.pack(side="right")
+        if latest_fn is not None:
+            btn_latest = ttk.Button(right, text="🔍 检测最新版",
+                                    style=accent_style,
+                                    command=lambda: _check_latest())
+            btn_latest.pack(side="left", padx=(0, 6))
+        if update_label is not None:
+            btn_update = ttk.Button(right, text=update_label, command=lambda: _sync_update())
+            btn_update.pack(side="left", padx=(0, 6))
+        btn_rescan = ttk.Button(right, text="↻ 重新扫描",
+                                command=lambda: self._rescan(win, reopen))
+        btn_rescan.pack(side="left")
         bar = ttk.Progressbar(head, mode="determinate", maximum=1000)
         bar.pack(fill="x", pady=(6, 2))
         lbl_prog = ttk.Label(head, text="", foreground=CLR["text_dim"])
         lbl_prog.pack(anchor="w")
 
         # ── 结果 / 错误横幅 ──
-        banner = tk.Label(win, text="", anchor="w", justify="left", wraplength=900,
-                          font=("Microsoft YaHei UI", 9), padx=12, pady=8)
+        banner = tk.Label(win, text="", anchor="w", justify="left", wraplength=1030,
+                          font=("Microsoft YaHei UI", 9), padx=12, pady=8,
+                          bg=CLR["panel"], fg=CLR["text"])
         banner.pack(fill="x", padx=10, pady=(6, 0))
 
         frm = ttk.Frame(win)
@@ -730,10 +823,18 @@ class UpdaterApp:
         tree.bind("<Double-1>", lambda e: self._open_row(tree, detail_of))
 
         status = ttk.Label(win, text="", relief="flat", anchor="w",
-                           background="#e4ebf5", padding=(10, 5))
+                           background=CLR["status_bg"], padding=(10, 5))
         status.pack(fill="x", side="bottom")
 
         state = {"last_log_pct": -1}
+
+        # 可更新行高亮（深绿边框提示）——按当前主题选色
+        try:
+            tree.tag_configure("newver",
+                               background=CLR["row_bg"]["update"],
+                               foreground=CLR["warn"])
+        except Exception:  # noqa: BLE001
+            pass
 
         def show_banner(text: str, kind: str = "ok"):
             color = {"ok": CLR["ok"], "warn": CLR["warn"], "err": CLR["err"]}[kind]
@@ -859,6 +960,131 @@ class UpdaterApp:
             self._log(f"✅ [{name}检测] 完成：{len(items)} 项，合计 {core.human_size(total_size)}，"
                       f"用时 {elapsed:.2f}s（{speed:.1f} 项/秒）")
 
+        # ---- 状态：供“检测最新版/同步更新”使用 ----
+        state["items"] = []
+
+        def _fill_done_hook(worker_, items_):
+            state["items"] = items_
+            # 让“检测最新版”按钮可用
+            try:
+                if latest_fn is not None:
+                    btn_latest.configure(state="normal")
+            except Exception:  # noqa: BLE001
+                pass
+
+        # 包装 fill：插入行后记录 items
+        _orig_fill = fill
+
+        def fill(result, err=None):
+            _orig_fill(result, err)
+            if err is None:
+                try:
+                    _fill_done_hook(worker, result.get("items", []) if result else [])
+                except Exception:  # noqa: BLE001
+                    pass
+
+        def _apply_latest_result(latest_map: dict):
+            """把检测到的最新版写回表格 latest 列，并标记可更新行。"""
+            upd = 0
+            for it in state["items"]:
+                info = latest_map.get(it.get("name", "")) or {}
+                latest = info.get("latest")
+                err = info.get("error")
+                col_name = "latest"
+                for iid, item in getattr(tree, "_item_map", {}).items():
+                    if item is it:
+                        if latest:
+                            tree.set(iid, col_name, latest)
+                            try:
+                                cur = item.get("version") or ""
+                                if cur and compare_hook(cur, latest) < 0:
+                                    tree.item(iid, tags=("newver",))
+                                    upd += 1
+                            except Exception:  # noqa: BLE001
+                                pass
+                        else:
+                            tree.set(iid, col_name, "—")
+                        break
+            return upd
+
+        def compare_hook(a: str, b: str) -> int:
+            return core.compare_versions(a, b)
+
+        def _check_latest():
+            if latest_fn is None or not state.get("items"):
+                return
+            try:
+                btn_latest.configure(state="disabled")
+            except Exception:  # noqa: BLE001
+                pass
+            show_banner(f"正在检测 {len(state['items'])} 项的最新版本（联网查询）…", kind="ok")
+            w = Worker(self._log,
+                       lambda res, e: _latest_done(res, e),
+                       on_progress=lambda rep: lbl_prog.configure(
+                           text=f"检测最新版：{rep.get('done', 0)}/{rep.get('total', 0)}"
+                                f"｜当前 {rep.get('current', '') or '—'}"))
+            state["_latest_worker"] = w
+            items_snapshot = list(state["items"])
+            w.start(latest_fn, items_snapshot)
+            win.after(120, lambda: self._poll_window(w, win))
+
+        def _latest_done(res, err):
+            try:
+                btn_latest.configure(state="normal")
+            except Exception:  # noqa: BLE001
+                pass
+            if err is not None:
+                show_banner(f"检测最新版失败：{err}", kind="err")
+                return
+            upd = _apply_latest_result(res or {})
+            total = len(state["items"])
+            show_banner(f"✅ 最新版检测完成：共 {total} 项，其中 {upd} 项有可用更新"
+                        + ("（技能若无 git 来源则无法检测）" if name == "技能" else "")
+                        + "。可在主窗口对源码检出/npm 全局执行更新。",
+                        kind="ok")
+            status.configure(text=f"检测完成（最新版）：{total} 项 / 可更新 {upd} 项")
+
+        def _sync_update():
+            """技能：git pull 同步；插件：更新其 npm 全局 dsh（内置包随其更新）。"""
+            if update_fn is None:
+                # 插件窗口：引导到主窗口的“更新所选安装”（npm 全局 @deepseek-ai/dsh）
+                if not messagebox.askyesno(
+                        title, "插件本身随 DeepSeek Harness 发布版更新。\n"
+                               "是否打开主窗口执行「npm 全局 / 源码检出」更新？\n"
+                               "（第三方插件请在对应 profile 中用 dsh plugin 更新）"):
+                    return
+                try:
+                    win.destroy()
+                except tk.TclError:
+                    pass
+                self.btn_update.invoke()
+                return
+            items_git = [it for it in state["items"]
+                         if (Path(it.get("path", "")) / ".git").is_dir()]
+            if not items_git:
+                show_banner("没有可 git 同步的技能：本机技能均为拷贝安装（无 .git 来源），"
+                            "请在官网手动下载覆盖。", kind="warn")
+                return
+            show_banner(f"正在 git 同步 {len(items_git)} 个技能…", kind="ok")
+            w = Worker(self._log,
+                       lambda res, e: _sync_done(res, e))
+            state["_sync_worker"] = w
+            w.start(update_fn, items_git)
+            win.after(120, lambda: self._poll_window(w, win))
+
+        def _sync_done(res, err):
+            if err is not None:
+                show_banner(f"同步失败：{err}", kind="err")
+                return
+            res = res or {}
+            okn = len(res.get("ok", []))
+            fail = res.get("failed", [])
+            skip = res.get("skipped", 0)
+            txt = f"✅ git 同步完成：成功 {okn}，失败 {len(fail)}，跳过 {skip}（无 git 来源）"
+            if fail:
+                txt += "\n" + "\n".join(f"   ✖ {a}: {b}" for a, b in fail[:5])
+            show_banner(txt, kind="ok" if not fail else "warn")
+
         worker = Worker(on_log=lambda m: None, on_finish=fill, on_progress=on_progress)
 
         def scan():
@@ -870,6 +1096,11 @@ class UpdaterApp:
                         "elapsed": 0.0, "speed": 0.0}
 
         worker.start(scan)
+        # “检测最新版”按钮初始禁用，待扫描完成才可用
+        try:
+            btn_latest.configure(state="disabled")
+        except Exception:  # noqa: BLE001
+            pass
         win.after(120, lambda: self._poll_window(worker, win))
 
     def _rescan(self, win: tk.Toplevel, reopen):
@@ -1116,6 +1347,7 @@ def main():
             try:
                 app.open_plugins()
                 app.open_skills()
+                app.toggle_theme()  # 冒烟中顺带验证深色主题切换
             except Exception as e:  # noqa: BLE001
                 print("subwindow error:", e)
 
