@@ -1,0 +1,65 @@
+name: Build & Release EXE
+
+# 触发方式：
+#   1) 推送形如 v1.0.0 / v1.0.1 的 tag 时自动构建并发布
+#   2) 也可在 Actions 页面手动运行（workflow_dispatch）
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-exe:
+    name: Build Windows EXE (PyInstaller)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install PyInstaller
+        run: python -m pip install --upgrade pyinstaller
+
+      - name: Build onefile EXE
+        run: |
+          python -m PyInstaller --noconfirm --clean --onefile --windowed `
+            --name "DeepSeekHarnessUpdater" `
+            --icon "dsh_updater.ico" `
+            "updater_gui.pyw"
+
+      - name: Compute SHA256
+        shell: pwsh
+        run: |
+          $f = "dist\DeepSeekHarnessUpdater.exe"
+          $h = (Get-FileHash $f -Algorithm SHA256).Hash
+          "SHA256: $h" | Out-File -FilePath dist\SHA256.txt -Encoding ascii
+          Get-Content dist\SHA256.txt
+
+      - name: Upload EXE artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DeepSeekHarnessUpdater-exe
+          path: |
+            dist/DeepSeekHarnessUpdater.exe
+            dist/SHA256.txt
+
+      # 由 tag 触发时：把 EXE 附加到对应 Release；没有 Release 则自动创建
+      - name: Publish to GitHub Release (tag push)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/DeepSeekHarnessUpdater.exe
+            dist/SHA256.txt
+          generate_release_notes: true
+          make_latest: true
+          draft: false
+          prerelease: false
