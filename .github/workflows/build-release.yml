@@ -43,23 +43,37 @@ jobs:
           "SHA256: $h" | Out-File -FilePath dist\SHA256.txt -Encoding ascii
           Get-Content dist\SHA256.txt
 
-      - name: Upload EXE artifact
+      # 源码版 zip：与本地用同一个脚本打包，保证两边内容一致。
+      # 版本号由脚本自行从 updater_gui.pyw 读取，不依赖 tag 名。
+      - name: Build source zip（源码版）
+        run: python pack_source.py --outdir dist
+
+      - name: Show build outputs
+        shell: pwsh
+        run: Get-ChildItem dist | Select-Object Name, Length | Format-Table -AutoSize
+
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: DeepSeekHarnessUpdater-exe
+          name: DeepSeekHarnessUpdater
           path: |
             dist/DeepSeekHarnessUpdater.exe
             dist/SHA256.txt
+            dist/dsh-updater-src-v*.zip
 
-      # 由 tag 触发时：把 EXE 附加到对应 Release；没有 Release 则自动创建
+      # 由 tag 触发时：把 EXE + 源码 zip 附加到对应 Release；没有 Release 则自动创建。
+      # 说明正文取自仓库内的 RELEASE_NOTES.md，保证每次发布都有完整的中文更新说明
+      # （此前用 generate_release_notes 只会生成一行 Full Changelog）。
       - name: Publish to GitHub Release (tag push)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
+          name: dsh 自动更新 ${{ github.ref_name }}
+          body_path: RELEASE_NOTES.md
           files: |
             dist/DeepSeekHarnessUpdater.exe
             dist/SHA256.txt
-          generate_release_notes: true
+            dist/dsh-updater-src-v*.zip
           make_latest: true
           draft: false
           prerelease: false

@@ -11,11 +11,15 @@
 from __future__ import annotations
 
 import json
+import re
+import zipfile
 from pathlib import Path
 
 import pytest
 
 import updater_core as core
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 # ---------------------------------------------------------------------------
@@ -375,6 +379,48 @@ def test_fetch_self_latest_returns_error_instead_of_raising(monkeypatch):
     assert r["ok"] is False
     assert r["error"]
     assert r["has_update"] is False
+
+
+# ---------------------------------------------------------------------------
+# 源码版打包脚本（本地与 CI 共用）
+# ---------------------------------------------------------------------------
+def test_read_app_version_looks_like_a_version():
+    import pack_source
+    ver = pack_source.read_app_version()
+    assert re.fullmatch(r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?", ver), ver
+
+
+def test_build_source_zip_structure(tmp_path):
+    import pack_source
+    out = pack_source.build_source_zip("9.9.9", tmp_path)
+    assert out.is_file()
+    assert out.name == "dsh-updater-src-v9.9.9.zip"
+    with zipfile.ZipFile(out) as z:
+        names = z.namelist()
+    # 顶层目录必须带版本号，且只含清单内的文件
+    assert len(names) == len(pack_source.SOURCE_FILES)
+    assert all(n.startswith("dsh-updater-src-v9.9.9/") for n in names)
+    assert "dsh-updater-src-v9.9.9/updater_core.py" in names
+    assert "dsh-updater-src-v9.9.9/updater_gui.pyw" in names
+
+
+def test_build_source_zip_refuses_when_file_missing(tmp_path, monkeypatch):
+    import pack_source
+    monkeypatch.setattr(pack_source, "SOURCE_FILES",
+                        ("updater_core.py", "这个文件不存在.xyz"))
+    with pytest.raises(FileNotFoundError):
+        pack_source.build_source_zip("9.9.9", tmp_path)
+
+
+def test_release_notes_mention_current_version():
+    """防呆：升了 APP_VERSION 却忘记同步 RELEASE_NOTES.md 时，让 CI 直接失败。
+
+    这正是 v0.6.8 发布时踩过的坑——Release 说明是自动生成的，没有任何功能描述。
+    """
+    import pack_source
+    ver = pack_source.read_app_version()
+    notes = (REPO_ROOT / "RELEASE_NOTES.md").read_text(encoding="utf-8")
+    assert ver in notes, f"RELEASE_NOTES.md 未提及当前版本 v{ver}，发布前请更新"
 
 
 # ---------------------------------------------------------------------------
