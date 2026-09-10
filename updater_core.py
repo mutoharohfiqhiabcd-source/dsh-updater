@@ -508,9 +508,11 @@ def fetch_self_latest(current_version: str = "") -> dict:
     cmp = compare_versions(res["latest"], current_version) if current_version else 1
     res["has_update"] = cmp > 0
     if current_version and cmp < 0:
-        # 远端最新发布的版本号反而更低：多半是历史 tag 顺序问题，如实提示
-        res["note"] = (f"远端最近发布的版本号（{res['latest']}）低于当前版本"
-                       f"（{current_version}），可能是历史 tag 顺序造成的，请以发布日期为准。")
+        # 远端最近发布的版本号反而更低。最常见的原因是「本地版本还没发布到
+        # GitHub」（正常状态），少数情况才是历史 tag 顺序异常，所以措辞保持中性，
+        # 不要一律说成异常。
+        res["note"] = (f"远端最近发布的是 {res['latest']}，低于当前版本 {current_version}；"
+                       "通常表示当前版本尚未发布到 GitHub。")
     return res
 
 

@@ -316,6 +316,67 @@ def test_self_repo_constants_point_to_this_project():
     assert core.SELF_REPO_NAME in core.SELF_TAGS_URL
 
 
+def test_fetch_self_latest_reports_newer_release(monkeypatch):
+    monkeypatch.setattr(core, "http_get_json", lambda url, timeout=20: [
+        {"tag_name": "v0.9.0", "published_at": "2026-10-01T00:00:00Z",
+         "html_url": "https://example.com/rel"},
+    ])
+    r = core.fetch_self_latest("0.6.8")
+    assert r["ok"] is True
+    assert r["source"] == "release"
+    assert r["latest"] == "0.9.0"
+    assert r["has_update"] is True
+    assert r["url"] == "https://example.com/rel"
+    assert r["note"] == ""
+
+
+def test_fetch_self_latest_reports_up_to_date(monkeypatch):
+    monkeypatch.setattr(core, "http_get_json", lambda url, timeout=20: [
+        {"tag_name": "v0.6.8", "published_at": "2026-09-11T00:00:00Z",
+         "html_url": "https://example.com/v068"},
+    ])
+    r = core.fetch_self_latest("0.6.8")
+    assert r["ok"] is True
+    assert r["has_update"] is False
+    assert r["note"] == ""
+
+
+def test_fetch_self_latest_notes_when_remote_is_older(monkeypatch):
+    """本地版本尚未发布是正常状态，提示措辞不应说成 tag 倒挂之类异常。"""
+    monkeypatch.setattr(core, "http_get_json", lambda url, timeout=20: [
+        {"tag_name": "v0.6.7", "published_at": "2026-09-06T04:51:17Z",
+         "html_url": "https://example.com/v067"},
+    ])
+    r = core.fetch_self_latest("0.6.8")
+    assert r["ok"] is True
+    assert r["has_update"] is False
+    assert "尚未发布" in r["note"]
+    assert "0.6.7" in r["note"]
+
+
+def test_fetch_self_latest_falls_back_to_tags(monkeypatch):
+    def fake(url, timeout=20):
+        if "releases" in url:
+            return []                                  # 远端没有 Release
+        return [{"name": "v0.6.7"}, {"name": "v0.6.5"}]
+    monkeypatch.setattr(core, "http_get_json", fake)
+    r = core.fetch_self_latest("0.6.6")
+    assert r["ok"] is True
+    assert r["source"] == "tag"
+    assert r["latest"] == "0.6.7"
+    assert r["has_update"] is True
+
+
+def test_fetch_self_latest_returns_error_instead_of_raising(monkeypatch):
+    def boom(url, timeout=20):
+        raise OSError("network down")
+    monkeypatch.setattr(core, "http_get_json", boom)
+    r = core.fetch_self_latest("0.6.8")
+    assert r["ok"] is False
+    assert r["error"]
+    assert r["has_update"] is False
+
+
 # ---------------------------------------------------------------------------
 # 本地偏好设置
 # ---------------------------------------------------------------------------

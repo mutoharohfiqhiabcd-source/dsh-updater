@@ -18,7 +18,7 @@ from pathlib import Path
 import updater_core as core
 
 APP_TITLE = "DeepSeek Harness 自动检测与更新器"
-APP_VERSION = "0.6.7"
+APP_VERSION = "0.6.8"
 
 
 def resource_path(name: str) -> str:
