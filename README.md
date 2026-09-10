@@ -86,6 +86,9 @@ copy /Y updater_gui.pyw updater_core.py dsh_updater.ico 目标目录\
    - 可选运行 `pnpm install` 同步依赖
 4. 更新前若检测到 DSH Web（127.0.0.1:3080）正在运行，会**中止更新**，请先关闭再重试。
 
+> 📄 源码版更新的完整细节、备份/回滚机制、以及如何把本工具自身同步到 GitHub，见：
+> **[源码版更新与GitHub同步说明.md](源码版更新与GitHub同步说明.md)**
+
 ### npm 全局安装
 列表里若发现 npm 全局 `@deepseek-ai/dsh`，更新会直接执行 `npm install -g @deepseek-ai/dsh@latest`。
 
