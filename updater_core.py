@@ -1651,6 +1651,69 @@ def update_npm_global(pkg_dir: Path, log=print) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# 本地偏好设置（持久化到用户配置目录）
+# ---------------------------------------------------------------------------
+# 注意：gpu_acceleration 目前只是「记录偏好」。DSH 本身没有提供 GPU 加速
+# 开关（源码与 profile 配置里均无相关键），所以这个值暂不影响任何行为。
+# 等 DSH 真正支持后，再在这里接入实际动作。
+SETTINGS_DEFAULTS = {
+    "gpu_acceleration": False,
+}
+
+
+def _settings_dir() -> Path:
+    """设置文件所在目录。可用 DSH_UPDATER_SETTINGS_DIR 覆盖（测试/便携用）。"""
+    custom = os.environ.get("DSH_UPDATER_SETTINGS_DIR")
+    if custom:
+        return Path(custom)
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        return Path(appdata) / "dsh-updater"
+    return Path.home() / ".config" / "dsh-updater"
+
+
+def settings_file() -> Path:
+    """设置文件完整路径。"""
+    return _settings_dir() / "settings.json"
+
+
+def load_settings() -> dict:
+    """读取本地偏好设置。
+
+    文件不存在 / 内容损坏 / 类型不符时一律回退到默认值，绝不抛异常
+    —— 启动阶段不能因为一个坏掉的配置文件就崩掉。
+    只接受 SETTINGS_DEFAULTS 里已知的键，且类型必须与默认值一致，
+    避免把外部写入的垃圾数据带进程序。
+    """
+    out = dict(SETTINGS_DEFAULTS)
+    try:
+        raw = settings_file().read_text(encoding="utf-8", errors="replace")
+        data = json.loads(raw)
+    except Exception:  # noqa: BLE001
+        return out
+    if not isinstance(data, dict):
+        return out
+    for key, default in SETTINGS_DEFAULTS.items():
+        if key in data and isinstance(data[key], type(default)):
+            out[key] = data[key]
+    return out
+
+
+def save_settings(data: dict) -> bool:
+    """保存偏好设置（原子写入）。成功返回 True，失败返回 False 而不抛异常。"""
+    try:
+        target = settings_file()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_name(target.name + ".tmp")
+        tmp.write_text(json.dumps(dict(data), ensure_ascii=False, indent=2),
+                       encoding="utf-8")
+        os.replace(tmp, target)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+# ---------------------------------------------------------------------------
 # 自测
 # ---------------------------------------------------------------------------
 def _selftest() -> int:

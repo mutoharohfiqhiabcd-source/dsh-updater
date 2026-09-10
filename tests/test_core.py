@@ -314,3 +314,57 @@ def test_self_repo_constants_point_to_this_project():
     assert "dsh-updater" in core.SELF_REPO_URL
     assert core.SELF_REPO_NAME in core.SELF_RELEASES_URL
     assert core.SELF_REPO_NAME in core.SELF_TAGS_URL
+
+
+# ---------------------------------------------------------------------------
+# 本地偏好设置
+# ---------------------------------------------------------------------------
+def test_settings_roundtrip(monkeypatch, tmp_path):
+    monkeypatch.setenv("DSH_UPDATER_SETTINGS_DIR", str(tmp_path))
+    assert core.load_settings()["gpu_acceleration"] is False        # 默认关
+    assert core.save_settings({"gpu_acceleration": True}) is True
+    assert core.load_settings()["gpu_acceleration"] is True
+    assert core.save_settings({"gpu_acceleration": False}) is True
+    assert core.load_settings()["gpu_acceleration"] is False
+
+
+def test_settings_missing_dir_returns_defaults(monkeypatch, tmp_path):
+    monkeypatch.setenv("DSH_UPDATER_SETTINGS_DIR", str(tmp_path / "not-created"))
+    assert core.load_settings() == core.SETTINGS_DEFAULTS
+
+
+def test_settings_corrupted_file_returns_defaults(monkeypatch, tmp_path):
+    monkeypatch.setenv("DSH_UPDATER_SETTINGS_DIR", str(tmp_path))
+    core.settings_file().write_text("{ 这不是 json", encoding="utf-8")
+    assert core.load_settings()["gpu_acceleration"] is False
+
+
+def test_settings_non_dict_json_returns_defaults(monkeypatch, tmp_path):
+    monkeypatch.setenv("DSH_UPDATER_SETTINGS_DIR", str(tmp_path))
+    core.settings_file().write_text("[1, 2, 3]", encoding="utf-8")
+    assert core.load_settings()["gpu_acceleration"] is False
+
+
+def test_settings_rejects_wrong_type_and_unknown_keys(monkeypatch, tmp_path):
+    """外部写坏的设置不应把垃圾数据带进程序。"""
+    monkeypatch.setenv("DSH_UPDATER_SETTINGS_DIR", str(tmp_path))
+    core.settings_file().write_text(
+        json.dumps({"gpu_acceleration": "yes", "evil_key": True}), encoding="utf-8")
+    loaded = core.load_settings()
+    assert loaded["gpu_acceleration"] is False      # 类型不符 → 回退默认值
+    assert "evil_key" not in loaded                 # 未声明的键被丢弃
+
+
+def test_settings_save_leaves_no_temp_file(monkeypatch, tmp_path):
+    monkeypatch.setenv("DSH_UPDATER_SETTINGS_DIR", str(tmp_path))
+    assert core.save_settings({"gpu_acceleration": True}) is True
+    assert list(tmp_path.glob("*.tmp")) == []       # 原子写入，不留临时文件
+    assert core.settings_file().name == "settings.json"
+
+
+def test_settings_save_failure_returns_false(monkeypatch, tmp_path):
+    """目标目录无法创建时应返回 False，而不是抛异常打断界面。"""
+    blocker = tmp_path / "blocker"
+    blocker.write_text("x", encoding="utf-8")       # 用文件占住路径
+    monkeypatch.setenv("DSH_UPDATER_SETTINGS_DIR", str(blocker / "sub"))
+    assert core.save_settings({"gpu_acceleration": True}) is False

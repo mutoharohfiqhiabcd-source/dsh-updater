@@ -181,8 +181,10 @@ class UpdaterApp:
     def __init__(self, root: tk.Tk):
         self.root = root
         root.title(f"{APP_TITLE} v{APP_VERSION}")
-        root.geometry("1020x660")
-        root.minsize(860, 560)
+        # 高度按实际内容取：底部状态栏（含版本号）与日志区都要放得下，
+        # 否则 pack 会把排在后面的部件完全挤掉（见 _build_ui 里的说明）。
+        root.geometry("1020x700")
+        root.minsize(860, 660)
 
         font = ("Microsoft YaHei UI", 10)
         import tkinter.font as tkfont
@@ -214,9 +216,11 @@ class UpdaterApp:
             except Exception:  # noqa: BLE001
                 pass
 
+        self.settings = core.load_settings()
         self._setup_style()
         self._build_ui()
-        self._log(f"{APP_TITLE} 已启动。\nDSH 数据目录：{core.DSH_HOME}")
+        self._log(f"{APP_TITLE} 已启动。\nDSH 数据目录：{core.DSH_HOME}\n"
+                  f"设置文件：{core.settings_file()}")
         self._log("正在自动检测本机安装与官方版本…")
         self.refresh_all()
 
@@ -306,6 +310,8 @@ class UpdaterApp:
             self.status.configure(bg=CLR["status_bg"], fg=CLR["text_dim"])
             self._status_bar.configure(bg=CLR["status_bg"])
             self.lbl_version.configure(bg=CLR["status_bg"], fg=CLR["accent"])
+            self.lbl_pref_title.configure(bg=CLR["panel"], fg=CLR["text"])
+            self.lbl_pref_file.configure(bg=CLR["panel"], fg=CLR["text_dim"])
             self.lbl_github.configure(background=CLR["panel"],
                                       foreground=CLR["accent"])
             self.lbl_npm.configure(background=CLR["panel"])
@@ -317,6 +323,28 @@ class UpdaterApp:
 
     def _build_ui(self):
         self.root.configure(bg=CLR["bg"])
+
+        # ── 底部状态栏：必须先 pack，才能在内容超长时保住自己的位置 ──
+        # 注意：pack 是按调用顺序分配空间的，内容总高度超出窗口时「最后 pack 的
+        # 部件」会被完全挤掉。状态栏排最后会导致版本号直接不显示，所以放在最前。
+        self._status_bar = tk.Frame(self.root, background=CLR["status_bg"])
+        self._status_bar.pack(fill="x", side="bottom")
+        self.status = tk.Label(self._status_bar, text="就绪", relief="flat", anchor="w",
+                               background=CLR["status_bg"], foreground=CLR["text_dim"],
+                               font=("Microsoft YaHei UI", 9), padx=10, pady=5)
+        self.status.pack(side="left", fill="x", expand=True)
+        self.lbl_version = tk.Label(
+            self._status_bar, text=f"当前版本 v{APP_VERSION} · 检查更新", anchor="e",
+            background=CLR["status_bg"], foreground=CLR["accent"],
+            font=("Microsoft YaHei UI", 9, "underline"), cursor="hand2",
+            padx=10, pady=5)
+        self.lbl_version.pack(side="right")
+        self.lbl_version.bind("<Button-1>", self._on_version_click)
+        self.lbl_version.bind(
+            "<Enter>", lambda e: self.lbl_version.configure(foreground=CLR["accent_hover"]))
+        self.lbl_version.bind(
+            "<Leave>", lambda e: self.lbl_version.configure(foreground=CLR["accent"]))
+        self._upd_win = None
 
         # ── 顶部横幅：标题与官方版本条 ──
         top = ttk.Frame(self.root, style="Panel.TFrame")
@@ -344,7 +372,7 @@ class UpdaterApp:
         cols = ("kind", "path", "version", "nature", "ref", "status")
         heads = {"kind": "类型", "path": "位置", "version": "当前版本",
                  "nature": "版本性质", "ref": "官方参考版本", "status": "状态"}
-        self.tree = ttk.Treeview(mid, columns=cols, show="headings", height=6)
+        self.tree = ttk.Treeview(mid, columns=cols, show="headings", height=5)
         for c in cols:
             self.tree.heading(c, text=heads[c])
         widths = {"kind": 112, "path": 372, "version": 100, "nature": 92, "ref": 112, "status": 96}
@@ -387,6 +415,28 @@ class UpdaterApp:
         self.btn_theme = ttk.Button(btns, text="🌙 深色模式", command=self.toggle_theme)
         self.btn_theme.pack(side="right", padx=(0, 8))
 
+        # ── 偏好设置行 ──
+        # 用 Panel 白底卡片：TCheckbutton / Dim.TLabel 两个样式都是以 panel 为底色的。
+        prefs = ttk.Frame(self.root, style="Panel.TFrame")
+        prefs.pack(fill="x", padx=10, pady=(6, 0))
+        prow = ttk.Frame(prefs, style="Panel.TFrame")
+        prow.pack(fill="x", padx=12, pady=8)
+        self.lbl_pref_title = tk.Label(prow, text="⚙ 偏好设置", background=CLR["panel"],
+                                       foreground=CLR["text"],
+                                       font=("Microsoft YaHei UI", 9, "bold"))
+        self.lbl_pref_title.pack(side="left", padx=(0, 14))
+        self.var_gpu = tk.BooleanVar(value=bool(self.settings.get("gpu_acceleration")))
+        self.chk_gpu = ttk.Checkbutton(prow, text="使用 GPU 加速", variable=self.var_gpu,
+                                       command=self._on_gpu_toggle)
+        self.chk_gpu.pack(side="left")
+        ttk.Label(prow, text="DSH 暂无 GPU 加速选项，仅记录偏好，暂不影响行为。",
+                  style="Dim.TLabel").pack(side="left", padx=(14, 0))
+        self.lbl_pref_file = tk.Label(prow, text="📂 打开设置文件", background=CLR["panel"],
+                                      foreground=CLR["text_dim"], cursor="hand2",
+                                      font=("Microsoft YaHei UI", 8, "underline"))
+        self.lbl_pref_file.pack(side="right", padx=(10, 0))
+        self.lbl_pref_file.bind("<Button-1>", lambda e: self._open_settings_file())
+
         # ── 当前操作进度横幅（扫描/下载/更新通用） ──
         progframe = ttk.LabelFrame(self.root, text="当前任务")
         progframe.pack(fill="x", padx=10, pady=4)
@@ -400,33 +450,13 @@ class UpdaterApp:
         # ── 日志区 ──
         logframe = ttk.LabelFrame(self.root, text="日志 / 进度")
         logframe.pack(fill="both", expand=True, padx=10, pady=6)
-        self.txt = tk.Text(logframe, height=9, wrap="word", state="disabled",
+        self.txt = tk.Text(logframe, height=4, wrap="word", state="disabled",
                            font=("Consolas", 9), background=CLR["log_bg"],
                            foreground=CLR["log_fg"], borderwidth=0, padx=8, pady=6)
         logvsb = ttk.Scrollbar(logframe, orient="vertical", command=self.txt.yview)
         self.txt.configure(yscrollcommand=logvsb.set)
         self.txt.pack(side="left", fill="both", expand=True, padx=(6, 0), pady=6)
         logvsb.pack(side="right", fill="y", padx=(0, 6), pady=6)
-
-        # ── 底部状态栏：左侧状态文字，右侧当前版本（点击可检查更新） ──
-        self._status_bar = tk.Frame(self.root, background=CLR["status_bg"])
-        self._status_bar.pack(fill="x", side="bottom")
-        self.status = tk.Label(self._status_bar, text="就绪", relief="flat", anchor="w",
-                               background=CLR["status_bg"], foreground=CLR["text_dim"],
-                               font=("Microsoft YaHei UI", 9), padx=10, pady=5)
-        self.status.pack(side="left", fill="x", expand=True)
-        self.lbl_version = tk.Label(
-            self._status_bar, text=f"当前版本 v{APP_VERSION} · 检查更新", anchor="e",
-            background=CLR["status_bg"], foreground=CLR["accent"],
-            font=("Microsoft YaHei UI", 9, "underline"), cursor="hand2",
-            padx=10, pady=5)
-        self.lbl_version.pack(side="right")
-        self.lbl_version.bind("<Button-1>", self._on_version_click)
-        self.lbl_version.bind(
-            "<Enter>", lambda e: self.lbl_version.configure(foreground=CLR["accent_hover"]))
-        self.lbl_version.bind(
-            "<Leave>", lambda e: self.lbl_version.configure(foreground=CLR["accent"]))
-        self._upd_win = None
 
     # ---------------- 日志 ----------------
     def _log(self, msg: str):
@@ -1197,8 +1227,38 @@ class UpdaterApp:
             APP_TITLE,
             f"DSH 数据目录（DSH_HOME）：\n{env}\n\n"
             f"技能目录：\n{skills_root}\n\n"
+            f"本更新器设置文件：\n{core.settings_file()}\n\n"
             "提示：可通过环境变量 DSH_HOME / DSH_SKILLS 更改检测位置。",
         )
+
+    # ---------------- 偏好设置 ----------------
+    def _open_settings_file(self):
+        """打开设置文件；文件还不存在时退而打开它所在的目录。"""
+        target = core.settings_file()
+        try:
+            if not target.exists():
+                target.parent.mkdir(parents=True, exist_ok=True)
+            self._try_open(str(target if target.exists() else target.parent))
+        except Exception as e:  # noqa: BLE001
+            self._log(f"⚠ 无法打开设置文件：{e}")
+
+    def _on_gpu_toggle(self):
+        """GPU 加速偏好变化时立即持久化。
+
+        该偏好目前不影响任何行为（DSH 未提供 GPU 加速选项），
+        因此日志与状态栏都明确说明，避免误以为它已经生效。
+        """
+        value = bool(self.var_gpu.get())
+        self.settings["gpu_acceleration"] = value
+        ok = core.save_settings(self.settings)
+        state = "开启" if value else "关闭"
+        if ok:
+            self._log(f"偏好已保存：GPU 加速 = {state}（仅本地记录，DSH 暂无对应选项）")
+            self._set_status(f"偏好已保存：GPU 加速 {state}")
+        else:
+            self._log(f"⚠ 偏好保存失败（{core.settings_file()} 不可写）："
+                      f"GPU 加速 = {state}，本次选择仅当前会话有效")
+            self._set_status("偏好保存失败，详见日志")
 
     # ---------------- 检查更新器自身更新（右下角版本号） ----------------
     def _on_version_click(self, _evt=None):
