@@ -1,0 +1,53 @@
+name: CI
+
+# 职责：每次推送/PR 验证源码健康度（语法、致命级静态检查、冒烟测试）。
+# 发布 EXE 由 build-release.yml 负责（推送 v* tag 触发）。
+#
+# 注意：本项目是 Windows 桌面程序，但代码全部是标准库，所以同时在
+# Linux 上跑一遍有助于及早发现平台相关问题。
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: 检查（${{ matrix.os }} / Python ${{ matrix.python-version }}）
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.10", "3.12"]
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: 安装检查工具
+        run: python -m pip install --upgrade pip flake8 pytest
+
+      # 只挑「一定是 bug」的规则：E9 语法错误、F63/F7 比较与断言问题、
+      # F82 未定义名。故意不启用纯风格规则，避免把格式差异当成失败。
+      # --filename 显式带上 *.pyw，否则 flake8 默认不检查界面文件。
+      - name: 致命级静态检查（含 .pyw）
+        run: >
+          python -m flake8 .
+          --count --select=E9,F63,F7,F82 --show-source --statistics
+          --filename=*.py,*.pyw
+
+      - name: 冒烟测试
+        run: python -m pytest -q

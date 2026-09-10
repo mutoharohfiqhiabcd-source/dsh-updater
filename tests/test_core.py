@@ -1,0 +1,269 @@
+# -*- coding: utf-8 -*-
+"""updater_core 冒烟测试。
+
+设计原则：
+  * 不联网、不读写真实用户目录（全部用 pytest 的 tmp_path）；
+  * 只覆盖纯函数与关键安全逻辑，跑得快（目标 < 1 秒）；
+  * 重点保护「源码检出识别」这条安全阀——它决定了更新时会不会误替换目录。
+
+运行：python -m pytest -q
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+import updater_core as core
+
+
+# ---------------------------------------------------------------------------
+# 辅助：构造一个合法的源码检出目录
+# ---------------------------------------------------------------------------
+def make_checkout(root: Path, *, name: str = "@deepseek-ai/dsh-root",
+                  cli_form: str = "package.json", version: str = "0.1.5") -> Path:
+    """在 root 下造一个源码检出。cli_form 可选 package.json / bin.ts / none。"""
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "package.json").write_text(
+        json.dumps({"name": name, "version": version}), encoding="utf-8")
+    if cli_form == "package.json":
+        cli = root / "apps" / "cli"
+        cli.mkdir(parents=True, exist_ok=True)
+        (cli / "package.json").write_text("{}", encoding="utf-8")
+    elif cli_form == "bin.ts":
+        src = root / "apps" / "cli" / "src"
+        src.mkdir(parents=True, exist_ok=True)
+        (src / "bin.ts").write_text("// bin", encoding="utf-8")
+    return root
+
+
+# ---------------------------------------------------------------------------
+# 版本号解析与比较
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("raw,expected", [
+    ("1.2.3", (1, 2, 3, "")),
+    ("v1.2.3", (1, 2, 3, "")),                 # v 前缀需被接受
+    ("0.1.0-rc.5", (0, 1, 0, "rc.5")),
+    ("1.2.3-alpha.1", (1, 2, 3, "alpha.1")),
+    ("", (0, 0, 0, "")),                       # 空串兜底
+])
+def test_version_key(raw, expected):
+    assert core.version_key(raw) == expected
+
+
+def test_version_key_unparsable_falls_back():
+    # 无法解析时不应抛异常，且保持原串小写（保证排序时不崩）
+    assert core.version_key("not-a-version") == (0, 0, 0, "not-a-version")
+    assert core.version_key("1.2") == (0, 0, 0, "1.2")
+
+
+@pytest.mark.parametrize("a,b,expected", [
+    ("1.2.3", "1.2.2", 1),
+    ("1.2.2", "1.2.3", -1),
+    ("1.2.3", "1.2.3", 0),
+    ("v0.1.5", "0.1.5", 0),                    # v 前缀不影响相等判定
+    ("0.1.0-rc.5", "0.1.3-alpha.1", -1),       # 与自检里的示例一致
+    ("1.0.0", "0.9.9", 1),
+])
+def test_compare_versions(a, b, expected):
+    assert core.compare_versions(a, b) == expected
+
+
+def test_compare_versions_is_antisymmetric():
+    assert core.compare_versions("1.2.3", "2.0.0") == -core.compare_versions("2.0.0", "1.2.3")
+
+
+def test_parse_package_version():
+    text = '{\n  "name": "@deepseek-ai/dsh",\n  "version": "0.1.5-rc.1"\n}'
+    assert core._parse_package_version(text) == "0.1.5-rc.1"
+    assert core._parse_package_version("{}") == ""
+
+
+@pytest.mark.parametrize("version,grade", [
+    ("1.2.3", "stable"),
+    ("0.1.5-rc.1", "candidate"),
+    ("0.1.3-alpha.1", "prerelease"),
+    ("1.0.0-beta", "prerelease"),
+    ("", "unstable"),
+])
+def test_grade_by_suffix(version, grade):
+    assert core._grade_by_suffix(version) == grade
+
+
+# ---------------------------------------------------------------------------
+# 格式化函数
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("n,expected", [
+    (0, "0 B"),
+    (512, "512 B"),
+    (1024, "1.0 KB"),
+    (1536, "1.5 KB"),
+    (1024 ** 2, "1.00 MB"),
+    (1024 ** 3, "1.00 GB"),
+])
+def test_human_size(n, expected):
+    assert core.human_size(n) == expected
+
+
+@pytest.mark.parametrize("seconds,expected", [
+    (float("nan"), "计算中…"),
+    (-1, "计算中…"),
+    (30, "30 秒"),
+    (90, "1 分 30 秒"),
+])
+def test_fmt_eta(seconds, expected):
+    assert core._fmt_eta(seconds) == expected
+
+
+def test_fmt_dl_progress_reports_percentage_and_speed():
+    total = 50 * 1024 * 1024
+    text = core._fmt_dl_progress(total // 2, total, 10.0)
+    assert "50%" in text
+    assert "MB/s" in text
+
+
+# ---------------------------------------------------------------------------
+# 源码检出识别（安全阀：识别错就会误替换目录）
+# ---------------------------------------------------------------------------
+def test_is_source_checkout_accepts_valid(tmp_path):
+    assert core._is_source_checkout(make_checkout(tmp_path / "a")) is True
+
+
+def test_is_source_checkout_accepts_bin_ts_form(tmp_path):
+    assert core._is_source_checkout(make_checkout(tmp_path / "b", cli_form="bin.ts")) is True
+
+
+def test_is_source_checkout_rejects_wrong_package_name(tmp_path):
+    p = make_checkout(tmp_path / "c", name="@deepseek-ai/dsh")
+    assert core._is_source_checkout(p) is False
+
+
+def test_is_source_checkout_rejects_missing_cli_form(tmp_path):
+    p = make_checkout(tmp_path / "d", cli_form="none")
+    assert core._is_source_checkout(p) is False
+
+
+def test_is_source_checkout_rejects_missing_package_json(tmp_path):
+    (tmp_path / "e").mkdir()
+    assert core._is_source_checkout(tmp_path / "e") is False
+
+
+def test_is_source_checkout_rejects_broken_json(tmp_path):
+    p = tmp_path / "f"
+    p.mkdir()
+    (p / "package.json").write_text("{ not json", encoding="utf-8")
+    assert core._is_source_checkout(p) is False
+
+
+def test_is_source_checkout_rejects_backup_dir(tmp_path):
+    """备份目录绝不能被识别为检出，否则会备份套备份、无限膨胀。"""
+    p = make_checkout(tmp_path / "dsh.dsh-bak-20260910-140000")
+    assert core._is_source_checkout(p) is False
+
+
+def test_read_dir_version(tmp_path):
+    (tmp_path / "package.json").write_text(
+        json.dumps({"name": "@deepseek-ai/dsh-root", "version": "9.9.9"}), encoding="utf-8")
+    assert core._read_dir_version(tmp_path) == "9.9.9"
+    # 缺失或损坏时返回空串而不抛异常
+    assert core._read_dir_version(tmp_path / "nope") == ""
+
+
+# ---------------------------------------------------------------------------
+# 技能版本解析
+# ---------------------------------------------------------------------------
+def test_parse_skill_version_top_level(tmp_path):
+    d = tmp_path / "skill-a"
+    d.mkdir()
+    (d / "SKILL.md").write_text(
+        "---\nname: demo\nversion: 1.2.3\n---\n\n正文\n", encoding="utf-8")
+    assert core.parse_skill_version(d) == "1.2.3"
+
+
+def test_parse_skill_version_metadata_section(tmp_path):
+    d = tmp_path / "skill-b"
+    d.mkdir()
+    (d / "SKILL.md").write_text(
+        '---\nname: demo\nmetadata:\n  version: "2.0.0"\n---\n\n正文\n', encoding="utf-8")
+    assert core.parse_skill_version(d) == "2.0.0"
+
+
+def test_parse_skill_version_without_frontmatter(tmp_path):
+    d = tmp_path / "skill-c"
+    d.mkdir()
+    (d / "SKILL.md").write_text("没有 frontmatter 的正文\n", encoding="utf-8")
+    assert core.parse_skill_version(d) is None
+    # 连 SKILL.md 都没有
+    assert core.parse_skill_version(tmp_path / "skill-nonexistent") is None
+
+
+# ---------------------------------------------------------------------------
+# 目录体积统计
+# ---------------------------------------------------------------------------
+def test_dir_size_counts_nested_files(tmp_path):
+    (tmp_path / "a.txt").write_bytes(b"x" * 100)
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    (sub / "b.txt").write_bytes(b"y" * 200)
+    assert core.dir_size(tmp_path) == 300
+
+
+def test_dir_size_always_skips_git_but_honours_skip_dirs(tmp_path):
+    (tmp_path / "a.txt").write_bytes(b"x" * 10)
+    git = tmp_path / ".git"
+    git.mkdir()
+    (git / "pack").write_bytes(b"z" * 500)
+    modules = tmp_path / "node_modules"
+    modules.mkdir()
+    (modules / "m.js").write_bytes(b"w" * 500)
+
+    # .git 无条件跳过；node_modules 默认计入
+    assert core.dir_size(tmp_path) == 510
+    # 显式跳过 node_modules 后只剩 a.txt
+    assert core.dir_size(tmp_path, skip_dirs=("node_modules",)) == 10
+
+
+# ---------------------------------------------------------------------------
+# 去重逻辑
+# ---------------------------------------------------------------------------
+def test_norm_path_key_is_stable_for_str_and_path(tmp_path):
+    p = tmp_path / "sub"
+    assert core._norm_path_key(p) == core._norm_path_key(str(p))
+
+
+def test_dedupe_installs_keeps_first_and_reports_removed(tmp_path):
+    target = str(tmp_path / "install")
+    first = {"path": target, "kind": "source"}
+    second = {"path": target, "kind": "npm"}
+    result = core._dedupe_installs([first, second])
+    assert len(result["installs"]) == 1
+    assert result["installs"][0]["kind"] == "source"   # 保留第一次出现的
+    assert len(result["removed"]) == 1
+
+
+def test_dedupe_scan_items(tmp_path):
+    dup = str(tmp_path / "dup")
+    other = str(tmp_path / "other")
+    result = core._dedupe_scan_items([
+        {"path": dup, "name": "a"},
+        {"path": dup, "name": "a-again"},
+        {"path": other, "name": "b"},
+    ])
+    assert len(result["items"]) == 2
+    assert result["removed"] == 1
+
+
+# ---------------------------------------------------------------------------
+# 常量健全性
+# ---------------------------------------------------------------------------
+def test_keep_dirs_protects_local_state():
+    """更新时必须保留 node_modules 与 .git，否则会丢依赖和 git 历史。"""
+    assert "node_modules" in core._KEEP_DIRS
+    assert ".git" in core._KEEP_DIRS
+
+
+def test_github_targets_are_consistent():
+    assert core.ZIP_URL.endswith(f"/{core.GITHUB_BRANCH}.zip")
+    assert core.GITHUB_REPO in core.RAW_PACKAGE_URL
+    assert core.GITHUB_REPO in core.API_COMMIT_URL
