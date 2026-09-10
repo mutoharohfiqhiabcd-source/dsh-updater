@@ -267,3 +267,50 @@ def test_github_targets_are_consistent():
     assert core.ZIP_URL.endswith(f"/{core.GITHUB_BRANCH}.zip")
     assert core.GITHUB_REPO in core.RAW_PACKAGE_URL
     assert core.GITHUB_REPO in core.API_COMMIT_URL
+
+
+# ---------------------------------------------------------------------------
+# 检查「更新器自身」是否有新版本
+# ---------------------------------------------------------------------------
+def test_pick_self_latest_uses_publish_date_not_version_number():
+    """本仓库 tag 存在版本号倒挂（v1.0.1 指向的提交比 v0.6.7 更早）。
+
+    因此必须按**发布时间**挑最新发布；若改成按版本号挑，会误报「有新版本」。
+    """
+    releases = [
+        {"tag_name": "v1.0.1", "published_at": "2026-09-05T18:00:00Z", "html_url": "u-old"},
+        {"tag_name": "v0.6.7", "published_at": "2026-09-06T04:51:17Z", "html_url": "u-new"},
+        {"tag_name": "v1.0.0", "published_at": "2026-09-05T17:00:00Z", "html_url": "u-older"},
+    ]
+    picked = core._pick_self_latest(releases)
+    assert picked["tag"] == "v0.6.7"      # 而不是版本号更大的 v1.0.1
+    assert picked["url"] == "u-new"
+
+
+def test_pick_self_latest_ignores_drafts_and_blank_tags():
+    releases = [
+        {"tag_name": "v9.9.9", "published_at": "2030-01-01T00:00:00Z", "draft": True},
+        {"tag_name": "   ", "published_at": "2030-01-01T00:00:00Z"},
+        {"tag_name": "v0.6.7", "published_at": "2026-09-06T04:51:17Z", "html_url": "u"},
+    ]
+    assert core._pick_self_latest(releases)["tag"] == "v0.6.7"
+
+
+def test_pick_self_latest_falls_back_to_created_at():
+    releases = [
+        {"tag_name": "v0.6.5", "published_at": None, "created_at": "2026-09-06T04:09:25Z"},
+        {"tag_name": "v0.6.1", "created_at": "2026-09-01T00:00:00Z"},
+    ]
+    assert core._pick_self_latest(releases)["tag"] == "v0.6.5"
+
+
+def test_pick_self_latest_handles_empty_and_bad_input():
+    assert core._pick_self_latest([]) is None
+    assert core._pick_self_latest(None) is None
+    assert core._pick_self_latest("not-a-list") is None
+
+
+def test_self_repo_constants_point_to_this_project():
+    assert "dsh-updater" in core.SELF_REPO_URL
+    assert core.SELF_REPO_NAME in core.SELF_RELEASES_URL
+    assert core.SELF_REPO_NAME in core.SELF_TAGS_URL

@@ -303,7 +303,9 @@ class UpdaterApp:
         try:
             self.root.configure(bg=CLR["bg"])
             self.txt.configure(bg=CLR["log_bg"], fg=CLR["log_fg"])
-            self.status.configure(bg=CLR["status_bg"])
+            self.status.configure(bg=CLR["status_bg"], fg=CLR["text_dim"])
+            self._status_bar.configure(bg=CLR["status_bg"])
+            self.lbl_version.configure(bg=CLR["status_bg"], fg=CLR["accent"])
             self.lbl_github.configure(background=CLR["panel"],
                                       foreground=CLR["accent"])
             self.lbl_npm.configure(background=CLR["panel"])
@@ -406,10 +408,25 @@ class UpdaterApp:
         self.txt.pack(side="left", fill="both", expand=True, padx=(6, 0), pady=6)
         logvsb.pack(side="right", fill="y", padx=(0, 6), pady=6)
 
-        # 底部状态栏
-        self.status = ttk.Label(self.root, text="就绪", relief="flat", anchor="w",
-                                background="#e4ebf5", padding=(10, 5))
-        self.status.pack(fill="x", side="bottom")
+        # ── 底部状态栏：左侧状态文字，右侧当前版本（点击可检查更新） ──
+        self._status_bar = tk.Frame(self.root, background=CLR["status_bg"])
+        self._status_bar.pack(fill="x", side="bottom")
+        self.status = tk.Label(self._status_bar, text="就绪", relief="flat", anchor="w",
+                               background=CLR["status_bg"], foreground=CLR["text_dim"],
+                               font=("Microsoft YaHei UI", 9), padx=10, pady=5)
+        self.status.pack(side="left", fill="x", expand=True)
+        self.lbl_version = tk.Label(
+            self._status_bar, text=f"当前版本 v{APP_VERSION} · 检查更新", anchor="e",
+            background=CLR["status_bg"], foreground=CLR["accent"],
+            font=("Microsoft YaHei UI", 9, "underline"), cursor="hand2",
+            padx=10, pady=5)
+        self.lbl_version.pack(side="right")
+        self.lbl_version.bind("<Button-1>", self._on_version_click)
+        self.lbl_version.bind(
+            "<Enter>", lambda e: self.lbl_version.configure(foreground=CLR["accent_hover"]))
+        self.lbl_version.bind(
+            "<Leave>", lambda e: self.lbl_version.configure(foreground=CLR["accent"]))
+        self._upd_win = None
 
     # ---------------- 日志 ----------------
     def _log(self, msg: str):
@@ -1182,6 +1199,125 @@ class UpdaterApp:
             f"技能目录：\n{skills_root}\n\n"
             "提示：可通过环境变量 DSH_HOME / DSH_SKILLS 更改检测位置。",
         )
+
+    # ---------------- 检查更新器自身更新（右下角版本号） ----------------
+    def _on_version_click(self, _evt=None):
+        self.check_updater_update()
+
+    def _close_upd_win(self):
+        win, self._upd_win = self._upd_win, None
+        if win is not None:
+            try:
+                win.destroy()
+            except tk.TclError:
+                pass
+
+    def check_updater_update(self):
+        """点击右下角版本号：弹出小窗口，检测本更新器自身是否有新版本。"""
+        win = self._upd_win
+        if win is not None:
+            try:
+                win.lift()
+                win.focus_force()
+                return
+            except tk.TclError:
+                self._upd_win = None
+
+        win = tk.Toplevel(self.root)
+        self._upd_win = win
+        self._upd_url = core.SELF_REPO_URL
+        win.title(f"检查更新 · 当前 v{APP_VERSION}")
+        win.resizable(False, False)
+        win.configure(bg=CLR["bg"])
+        self._apply_icon(win)
+        win.transient(self.root)
+        win.protocol("WM_DELETE_WINDOW", self._close_upd_win)
+        win.bind("<Escape>", lambda e: self._close_upd_win())
+
+        frm = ttk.Frame(win, padding=16)
+        frm.pack(fill="both", expand=True)
+        tk.Label(frm, text="检查更新器自身更新", anchor="w", background=CLR["bg"],
+                 foreground=CLR["text"], font=("Microsoft YaHei UI", 11, "bold")).pack(anchor="w")
+        tk.Label(frm, text=f"当前版本：v{APP_VERSION}", anchor="w", background=CLR["bg"],
+                 foreground=CLR["text_dim"], font=("Microsoft YaHei UI", 9)).pack(
+                     anchor="w", pady=(2, 10))
+
+        self._upd_status = tk.Label(frm, text="正在检查 GitHub 上的最新发布…", anchor="w",
+                                    justify="left", width=52, background=CLR["bg"],
+                                    foreground=CLR["text"])
+        self._upd_status.pack(anchor="w")
+        self._upd_detail = tk.Label(frm, text="", anchor="w", justify="left", width=52,
+                                    background=CLR["bg"], foreground=CLR["text_dim"])
+        self._upd_detail.pack(anchor="w", pady=(6, 0))
+
+        btns = ttk.Frame(frm)
+        btns.pack(fill="x", pady=(16, 0))
+        self._upd_open_btn = ttk.Button(btns, text="打开 GitHub 页面", state="disabled",
+                                        command=lambda: self._open_url(self._upd_url))
+        self._upd_open_btn.pack(side="left")
+        ttk.Button(btns, text="关闭", command=self._close_upd_win).pack(side="right")
+
+        # 居中显示在主窗口上方
+        win.update_idletasks()
+        try:
+            w, h = win.winfo_width(), win.winfo_height()
+            x = self.root.winfo_rootx() + (self.root.winfo_width() - w) // 2
+            y = self.root.winfo_rooty() + max((self.root.winfo_height() - h) // 3, 0)
+            win.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        except tk.TclError:
+            pass
+        win.focus_force()
+
+        wk = Worker(on_log=lambda _m: None, on_finish=self._on_upd_check_done)
+        wk.start(core.fetch_self_latest, APP_VERSION)
+        self._poll_window(wk, win)
+
+    def _open_url(self, url: str):
+        if not url:
+            return
+        try:
+            import webbrowser
+            webbrowser.open(url)
+        except Exception as e:  # noqa: BLE001
+            self._log(f"⚠ 无法打开链接：{e}")
+
+    def _on_upd_check_done(self, result, err):
+        if self._upd_win is None:
+            return
+        try:
+            if err is not None:
+                self._upd_status.configure(text="检查失败", foreground=CLR["err"])
+                self._upd_detail.configure(text=f"{type(err).__name__}: {err}")
+                return
+            result = result or {}
+            if not result.get("ok"):
+                self._upd_status.configure(text="检查失败", foreground=CLR["err"])
+                self._upd_detail.configure(text=result.get("error") or "未知原因")
+                return
+
+            tag = result.get("tag") or ""
+            date = (result.get("date") or "")[:10]
+            self._upd_url = result.get("url") or core.SELF_REPO_URL
+            self._upd_open_btn.configure(state="normal")
+
+            if result.get("has_update"):
+                self._upd_status.configure(text=f"🎉 发现新版本：{tag}", foreground=CLR["ok"])
+                lines = [f"当前 v{APP_VERSION}  →  最新 {tag}"]
+                if date:
+                    lines.append(f"发布时间：{date}")
+                lines.append("点击左下按钮打开 GitHub 页面。")
+                self._upd_detail.configure(text="\n".join(lines))
+            else:
+                self._upd_status.configure(text=f"✅ 已是最新版本（v{APP_VERSION}）",
+                                           foreground=CLR["ok"])
+                line = f"远端最近发布：{tag}"
+                if date:
+                    line += f"（{date}）"
+                if result.get("note"):
+                    line += "\n\n" + result["note"]
+                self._upd_detail.configure(text=line)
+        except tk.TclError:
+            pass
 
     # ---------------- 行双击 ----------------
     def _on_row_double(self, _evt):

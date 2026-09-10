@@ -41,6 +41,18 @@ API_COMMIT_URL = (
     f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/commits/{GITHUB_BRANCH}"
 )
 NPM_LATEST_URL = "https://registry.npmjs.org/@deepseek-ai/dsh/latest"
+
+# ---- 本更新器自身的仓库（用于「检查更新器更新」）----
+SELF_REPO_OWNER = "mutoharohfiqhiabcd-source"
+SELF_REPO_NAME = "dsh-updater"
+SELF_REPO_URL = f"https://github.com/{SELF_REPO_OWNER}/{SELF_REPO_NAME}"
+SELF_RELEASES_URL = (
+    f"https://api.github.com/repos/{SELF_REPO_OWNER}/{SELF_REPO_NAME}/releases?per_page=20"
+)
+SELF_TAGS_URL = (
+    f"https://api.github.com/repos/{SELF_REPO_OWNER}/{SELF_REPO_NAME}/tags?per_page=100"
+)
+
 UA = {"User-Agent": "dsh-auto-updater/1.0 (+https://github.com/deepseek-ai/deepseek-harness)"}
 
 HOME = Path.home()
@@ -411,6 +423,95 @@ def fetch_official_versions() -> dict:
     if not out["npm"].get("engines_node"):
         out["npm"]["engines_node"] = out["github"].get("engines_node")
     return out
+
+
+# ---------------------------------------------------------------------------
+# 检查「更新器自身」是否有新版本
+# ---------------------------------------------------------------------------
+def _pick_self_latest(releases: list) -> dict | None:
+    """从 GitHub Releases 列表挑出「最近发布」的一个（纯函数，便于测试）。
+
+    刻意按**发布时间**而不是版本号挑选：本仓库历史 tag 存在版本号倒挂
+    （v1.0.1 指向的提交比 v0.6.7 更早），按版本号挑会误报「有新版本」。
+    忽略草稿（draft）与缺少 tag 的条目。
+    """
+    if not isinstance(releases, list):
+        return None
+    usable = [r for r in releases
+              if isinstance(r, dict)
+              and not r.get("draft")
+              and str(r.get("tag_name") or "").strip()]
+    if not usable:
+        return None
+    usable.sort(key=lambda r: str(r.get("published_at") or r.get("created_at") or ""),
+                reverse=True)
+    top = usable[0]
+    return {
+        "tag": str(top["tag_name"]).strip(),
+        "date": str(top.get("published_at") or top.get("created_at") or ""),
+        "url": str(top.get("html_url") or SELF_REPO_URL),
+        "source": "release",
+    }
+
+
+def fetch_self_latest(current_version: str = "") -> dict:
+    """查询本更新器自身在 GitHub 上的最新发布，判断是否需要更新。
+
+    返回 dict：
+      ok         查询是否成功
+      current    当前版本（原样回传）
+      latest     远端最新版本号（去掉 v 前缀）
+      tag        远端原始 tag 名
+      date       发布时间（ISO8601，可能为空）
+      url        发布页面地址
+      source     release / tag
+      has_update 是否存在比当前更新的版本
+      note       需要额外提示用户的说明（可为空）
+      error      失败原因（ok=False 时）
+    """
+    res = {
+        "ok": False, "current": current_version, "latest": "", "tag": "",
+        "date": "", "url": SELF_REPO_URL, "source": "", "has_update": False,
+        "note": "", "error": "",
+    }
+
+    cand = None
+    try:
+        cand = _pick_self_latest(http_get_json(SELF_RELEASES_URL, timeout=20))
+    except Exception as e:  # noqa: BLE001
+        res["error"] = f"无法访问 GitHub Releases 接口：{type(e).__name__}: {e}"
+
+    if cand is None:
+        # 退回用 tags（此时没有发布时间，按版本号取最大的那个）
+        try:
+            tags = http_get_json(SELF_TAGS_URL, timeout=20)
+        except Exception as e:  # noqa: BLE001
+            res["error"] = res["error"] or f"无法访问 GitHub Tags 接口：{type(e).__name__}: {e}"
+            tags = None
+        if isinstance(tags, list) and tags:
+            best = max(tags, key=lambda t: version_key(str(t.get("name") or "")))
+            cand = {
+                "tag": str(best.get("name") or "").strip(),
+                "date": "",
+                "url": f"{SELF_REPO_URL}/releases",
+                "source": "tag",
+            }
+
+    if cand is None:
+        res["error"] = res["error"] or "远端没有可用的 Release 或 Tag。"
+        return res
+
+    res.update({"ok": True, "tag": cand["tag"], "date": cand["date"],
+                "url": cand["url"], "source": cand["source"],
+                "latest": cand["tag"].lstrip("vV")})
+
+    cmp = compare_versions(res["latest"], current_version) if current_version else 1
+    res["has_update"] = cmp > 0
+    if current_version and cmp < 0:
+        # 远端最新发布的版本号反而更低：多半是历史 tag 顺序问题，如实提示
+        res["note"] = (f"远端最近发布的版本号（{res['latest']}）低于当前版本"
+                       f"（{current_version}），可能是历史 tag 顺序造成的，请以发布日期为准。")
+    return res
 
 
 # ---------------------------------------------------------------------------
