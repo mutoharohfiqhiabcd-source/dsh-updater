@@ -558,3 +558,52 @@ def test_language_setting_roundtrip(monkeypatch, tmp_path):
     assert core.load_settings()["language"] == "auto"        # 默认跟随系统
     core.save_settings({**core.load_settings(), "language": "ja"})
     assert core.load_settings()["language"] == "ja"
+
+
+# ---------------------------------------------------------------------------
+# 检测结果缓存
+# ---------------------------------------------------------------------------
+def test_detection_cache_roundtrip(monkeypatch, tmp_path):
+    monkeypatch.setenv("DSH_UPDATER_SETTINGS_DIR", str(tmp_path))
+    result = {"installs": [{"kind": "source", "path": "D:/x", "version": "1.2.3"}],
+              "duplicates": 2}
+    stamp = core.save_detection_cache(result, saved_at="2026-09-10T18:30:00")
+    assert stamp == "2026-09-10T18:30:00"
+    cached = core.load_detection_cache()
+    assert cached["saved_at"] == stamp
+    assert cached["result"]["installs"][0]["kind"] == "source"
+    assert cached["result"]["duplicates"] == 2
+
+
+def test_detection_cache_missing_returns_empty(monkeypatch, tmp_path):
+    monkeypatch.setenv("DSH_UPDATER_SETTINGS_DIR", str(tmp_path / "nope"))
+    assert core.load_detection_cache() == {}
+
+
+def test_detection_cache_corrupted_returns_empty(monkeypatch, tmp_path):
+    monkeypatch.setenv("DSH_UPDATER_SETTINGS_DIR", str(tmp_path))
+    core.cache_file().write_text("{ 坏掉的 json", encoding="utf-8")
+    assert core.load_detection_cache() == {}
+
+
+def test_detection_cache_wrong_shape_returns_empty(monkeypatch, tmp_path):
+    """结构不对（缺 result，或 result 不是 dict）也要走「无缓存」路径。"""
+    monkeypatch.setenv("DSH_UPDATER_SETTINGS_DIR", str(tmp_path))
+    core.cache_file().write_text('{"saved_at": "2026-09-10T18:30:00"}', encoding="utf-8")
+    assert core.load_detection_cache() == {}
+    core.cache_file().write_text('{"saved_at": "x", "result": [1, 2]}', encoding="utf-8")
+    assert core.load_detection_cache() == {}
+
+
+def test_cache_time_text_formats_and_falls_back():
+    assert core.cache_time_text("2026-09-10T18:30:00") == "2026-09-10 18:30"
+    assert core.cache_time_text("") == ""
+    # 解析不了时不应抛异常
+    assert core.cache_time_text("garbage") == "garbage"
+
+
+def test_save_detection_cache_handles_unserializable_values(monkeypatch, tmp_path):
+    """检测结果里混入 Path 等类型时也要能存下来（default=str 兜底）。"""
+    monkeypatch.setenv("DSH_UPDATER_SETTINGS_DIR", str(tmp_path))
+    assert core.save_detection_cache({"path": tmp_path}) != ""
+    assert core.load_detection_cache()["result"]["path"] == str(tmp_path)

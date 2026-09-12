@@ -513,3 +513,20 @@ EXTRA["ko"] = {
 }
 
 
+# 检测缓存相关文案（v0.7.0 新增）
+for _lang, _pair in {
+    "en": ("Last scan: {p1}",
+           "Loaded the previous scan result ({p1}); rescanning in the background…"),
+    "zh-TW": ("上次偵測：{p1}",
+              "已載入上次偵測結果（{p1}），正在背景重新偵測…"),
+    "ja": ("前回の検出：{p1}",
+           "前回の検出結果を読み込みました（{p1}）。バックグラウンドで再検出中…"),
+    "ko": ("마지막 검사: {p1}",
+           "이전 검사 결과를 불러왔습니다({p1}). 백그라운드에서 다시 검사하는 중…"),
+}.items():
+    EXTRA[_lang].update({
+        "上次检测：{p1}": _pair[0],
+        "已载入上次检测结果（{p1}），正在后台重新检测…": _pair[1],
+    })
+
+

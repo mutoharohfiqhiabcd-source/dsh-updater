@@ -1719,6 +1719,57 @@ def save_settings(data: dict) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# 检测结果缓存
+# ---------------------------------------------------------------------------
+def cache_file() -> Path:
+    """检测结果缓存文件（与设置文件同目录）。"""
+    return _settings_dir() / "cache.json"
+
+
+def cache_time_text(saved_at: str) -> str:
+    """把缓存时间戳格式化为「2026-09-10 18:30」；解析不了则原样截断返回。"""
+    if not saved_at:
+        return ""
+    try:
+        return datetime.datetime.fromisoformat(str(saved_at)).strftime("%Y-%m-%d %H:%M")
+    except Exception:  # noqa: BLE001
+        return str(saved_at)[:16]
+
+
+def save_detection_cache(result: dict, saved_at: str | None = None) -> str:
+    """缓存一次检测结果，返回写入的时间戳；失败返回空串（不抛异常）。
+
+    用 default=str 兜底：检测结果里可能混有 Path 等非 JSON 类型。
+    """
+    stamp = saved_at or datetime.datetime.now().isoformat(timespec="seconds")
+    try:
+        target = cache_file()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_name(target.name + ".tmp")
+        tmp.write_text(json.dumps({"saved_at": stamp, "result": result},
+                                  ensure_ascii=False, default=str),
+                       encoding="utf-8")
+        os.replace(tmp, target)
+        return stamp
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def load_detection_cache() -> dict:
+    """读取缓存，返回 {"saved_at": str, "result": dict}。
+
+    文件缺失、损坏或结构不对时返回 {}，调用方据此走「无缓存」路径。
+    """
+    try:
+        data = json.loads(cache_file().read_text(encoding="utf-8", errors="replace"))
+    except Exception:  # noqa: BLE001
+        return {}
+    if not isinstance(data, dict) or not isinstance(data.get("result"), dict):
+        return {}
+    return data
+
+
+# ---------------------------------------------------------------------------
 # 自测
 # ---------------------------------------------------------------------------
 def _selftest() -> int:

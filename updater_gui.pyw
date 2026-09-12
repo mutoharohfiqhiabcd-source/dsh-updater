@@ -225,6 +225,16 @@ class UpdaterApp:
         self._log(f"{APP_TITLE} 已启动。\nDSH 数据目录：{core.DSH_HOME}\n"
                   f"设置文件：{core.settings_file()}")
         self._log(t("正在自动检测本机安装与官方版本…"))
+        # 先用上次的检测结果填充界面（若有缓存），再后台重新检测
+        cached = core.load_detection_cache()
+        if cached.get("result"):
+            try:
+                self._on_detect_done(cached["result"], None)
+                stamp = core.cache_time_text(cached.get("saved_at", ""))
+                self._set_cache_label(cached.get("saved_at", ""))
+                self._log(t("已载入上次检测结果（{p1}），正在后台重新检测…", p1=stamp))
+            except Exception as e:  # noqa: BLE001
+                self._log(f"⚠ 载入检测缓存失败：{e}")
         self.refresh_all()
 
     # ---------------- UI 构建 ----------------
@@ -313,6 +323,7 @@ class UpdaterApp:
             self.status.configure(bg=CLR["status_bg"], fg=CLR["text_dim"])
             self._status_bar.configure(bg=CLR["status_bg"])
             self.lbl_version.configure(bg=CLR["status_bg"], fg=CLR["accent"])
+            self.lbl_cache.configure(bg=CLR["status_bg"], fg=CLR["text_dim"])
             self.lbl_pref_title.configure(bg=CLR["panel"], fg=CLR["text"])
             self.lbl_pref_file.configure(bg=CLR["panel"], fg=CLR["text_dim"])
             self.lbl_github.configure(background=CLR["panel"],
@@ -342,6 +353,11 @@ class UpdaterApp:
             font=("Microsoft YaHei UI", 9, "underline"), cursor="hand2",
             padx=10, pady=5)
         self.lbl_version.pack(side="right")
+        # 检测缓存时间（显示在版本号左侧）
+        self.lbl_cache = tk.Label(self._status_bar, text="", anchor="e",
+                                  background=CLR["status_bg"], foreground=CLR["text_dim"],
+                                  font=("Microsoft YaHei UI", 9), padx=6)
+        self.lbl_cache.pack(side="right", padx=(0, 6))
         self.lbl_version.bind("<Button-1>", self._on_version_click)
         self.lbl_version.bind(
             "<Enter>", lambda e: self.lbl_version.configure(foreground=CLR["accent_hover"]))
@@ -487,6 +503,14 @@ class UpdaterApp:
     def _set_status(self, text: str):
         self.status.configure(text=text)
 
+    def _set_cache_label(self, stamp: str) -> None:
+        """在状态栏显示「上次检测：YYYY-MM-DD HH:MM」。"""
+        try:
+            txt = core.cache_time_text(stamp)
+            self.lbl_cache.configure(text=t("上次检测：{p1}", p1=txt) if txt else "")
+        except tk.TclError:
+            pass
+
     # ---------------- 进度横幅 ----------------
     def _prog_reset(self, text: str = ""):
         self.prog.configure(value=0)
@@ -537,6 +561,8 @@ class UpdaterApp:
             messagebox.showerror(APP_TITLE, t("检测失败：\n{err}", err=err))
             self._set_status(t("检测失败"))
             return
+        # 缓存本次检测结果，供下次启动时先显示（含检测时间）
+        self._set_cache_label(core.save_detection_cache(result))
         self.official = result["official"]
         gh = result["official"]["github"]
         npm = result["official"]["npm"]
