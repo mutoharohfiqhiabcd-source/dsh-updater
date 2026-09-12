@@ -225,6 +225,8 @@ class UpdaterApp:
         self._log(f"{APP_TITLE} 已启动。\nDSH 数据目录：{core.DSH_HOME}\n"
                   f"设置文件：{core.settings_file()}")
         self._log(t("正在自动检测本机安装与官方版本…"))
+        # 右上角先用缓存里的版本与上次检测时间填充
+        self._render_cached_official()
         # 先用上次的检测结果填充界面（若有缓存），再后台重新检测
         cached = core.load_detection_cache()
         if cached.get("result"):
@@ -323,7 +325,6 @@ class UpdaterApp:
             self.status.configure(bg=CLR["status_bg"], fg=CLR["text_dim"])
             self._status_bar.configure(bg=CLR["status_bg"])
             self.lbl_version.configure(bg=CLR["status_bg"], fg=CLR["accent"])
-            self.lbl_cache.configure(bg=CLR["status_bg"], fg=CLR["text_dim"])
             self.lbl_pref_title.configure(bg=CLR["panel"], fg=CLR["text"])
             self.lbl_pref_file.configure(bg=CLR["panel"], fg=CLR["text_dim"])
             self.lbl_github.configure(background=CLR["panel"],
@@ -353,11 +354,6 @@ class UpdaterApp:
             font=("Microsoft YaHei UI", 9, "underline"), cursor="hand2",
             padx=10, pady=5)
         self.lbl_version.pack(side="right")
-        # 检测缓存时间（显示在版本号左侧）
-        self.lbl_cache = tk.Label(self._status_bar, text="", anchor="e",
-                                  background=CLR["status_bg"], foreground=CLR["text_dim"],
-                                  font=("Microsoft YaHei UI", 9), padx=6)
-        self.lbl_cache.pack(side="right", padx=(0, 6))
         self.lbl_version.bind("<Button-1>", self._on_version_click)
         self.lbl_version.bind(
             "<Enter>", lambda e: self.lbl_version.configure(foreground=CLR["accent_hover"]))
@@ -378,6 +374,10 @@ class UpdaterApp:
         # 右侧版本条（白底卡片）
         verbox = ttk.Frame(top, style="Panel.TFrame")
         verbox.pack(side="right", padx=12, pady=8)
+        # 右上角显示上次检测时间（来自本地缓存）
+        self.lbl_lastcheck = ttk.Label(verbox, text="", foreground=CLR["text_dim"],
+                                       background=CLR["panel"])
+        self.lbl_lastcheck.pack(anchor="e", pady=(0, 3))
         self.lbl_github = ttk.Label(verbox, text=t("🌐 官方 GitHub master：检测中…"),
                                     foreground=CLR["accent"], background=CLR["panel"])
         self.lbl_github.pack(anchor="e")
@@ -503,11 +503,34 @@ class UpdaterApp:
     def _set_status(self, text: str):
         self.status.configure(text=text)
 
-    def _set_cache_label(self, stamp: str) -> None:
-        """在状态栏显示「上次检测：YYYY-MM-DD HH:MM」。"""
+    def _set_cache_label(self, stamp: str, detecting: bool = False) -> None:
+        """右上角显示「上次检测：YYYY-MM-DD HH:MM」，检测中时追加提示。"""
         try:
             txt = core.cache_time_text(stamp)
-            self.lbl_cache.configure(text=t("上次检测：{p1}", p1=txt) if txt else "")
+            if not txt:
+                self.lbl_lastcheck.configure(text=t("检测中…") if detecting else "")
+                return
+            label = t("上次检测：{p1}", p1=txt)
+            if detecting:
+                label += " · " + t("检测中…")
+            self.lbl_lastcheck.configure(text=label)
+        except tk.TclError:
+            pass
+
+    def _render_cached_official(self) -> None:
+        """启动时先用缓存里的官方版本填右上角，避免一直显示「检测中…」。"""
+        cached = core.load_detection_cache()
+        official = (cached.get("result") or {}).get("official") or {}
+        self._set_cache_label(cached.get("saved_at", ""), detecting=True)
+        gh = official.get("github") or {}
+        npm = official.get("npm") or {}
+        try:
+            if gh.get("version"):
+                self.lbl_github.configure(
+                    text=t("🌐 官方 GitHub master：{gh_txt}", gh_txt=gh["version"]))
+            if npm.get("version"):
+                self.lbl_npm.configure(
+                    text=t("📦 npm 发布版：{npm_txt}", npm_txt=npm["version"]))
         except tk.TclError:
             pass
 
@@ -546,6 +569,8 @@ class UpdaterApp:
         self._worker = worker
         worker.start(core.detect_all)
         self._poll(worker)
+        # 右上角提示正在检测（若有缓存，保留上次时间）
+        self._set_cache_label(core.load_detection_cache().get("saved_at", ""), detecting=True)
 
     def _poll(self, worker: Worker):
         try:
@@ -1318,8 +1343,9 @@ class UpdaterApp:
     def _rebuild_ui(self):
         """按当前语言重建整个界面（销毁所有子部件后重新构建）。
 
-        界面文案是在构建时取值的，所以换语言必须重建；重建后会重新检测一次，
-        因此不会留下空白列表。
+        界面文案是在构建时取值的，所以换语言必须重建。但**换语言只是改文案，
+        不该重新联网/扫描**——所以优先用上次的检测结果重建列表，只有在没有
+        缓存时才退回去重新检测。
         """
         try:
             for child in self.root.winfo_children():
@@ -1331,6 +1357,15 @@ class UpdaterApp:
         self._build_ui()
         self._log(f"界面语言：{i18n.language_display_name(i18n.get_language())}"
                   f"（{i18n.get_language()}）")
+        cached = core.load_detection_cache()
+        if cached.get("result"):
+            try:
+                self._on_detect_done(cached["result"], None)
+                self._set_cache_label(cached.get("saved_at", ""))
+                self._log(t("已按新语言重建界面（沿用上次检测结果，未重新扫描）"))
+                return
+            except Exception as e:  # noqa: BLE001
+                self._log(f"⚠ 用缓存重建界面失败，改为重新检测：{e}")
         self.refresh_all()
 
     def _open_settings_file(self):

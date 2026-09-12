@@ -552,3 +552,13 @@ for _lang, _triple in {
     })
 
 
+
+
+# 右上角检测状态（v0.7.1 新增）
+for _lang, _w in {
+    "en": "checking…",
+    "zh-TW": "偵測中…",
+    "ja": "確認中…",
+    "ko": "확인 중…",
+}.items():
+    EXTRA[_lang].update({"检测中…": _w})
