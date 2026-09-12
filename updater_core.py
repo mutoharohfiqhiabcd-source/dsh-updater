@@ -1797,7 +1797,7 @@ def _selftest() -> int:
         req = urllib.request.Request(ZIP_URL, headers=UA, method="HEAD")
         with urllib.request.urlopen(req, timeout=20) as resp:
             total = resp.headers.get("Content-Length")
-            print(t("  {ZIP_URL}\\n  HTTP {p1}  大小约 {p2}", ZIP_URL=ZIP_URL, p1=resp.status, p2=human_size(int(total or 0))))
+            print(t("  {ZIP_URL}\n  HTTP {p1}  大小约 {p2}", ZIP_URL=ZIP_URL, p1=resp.status, p2=human_size(int(total or 0))))
     except Exception as e:  # noqa: BLE001
         print(t("  探测失败：{e}", e=e))
 

@@ -534,7 +534,7 @@ class UpdaterApp:
     def _on_detect_done(self, result, err):
         self._set_busy(False)
         if err is not None:
-            messagebox.showerror(APP_TITLE, t("检测失败：\\n{err}", err=err))
+            messagebox.showerror(APP_TITLE, t("检测失败：\n{err}", err=err))
             self._set_status(t("检测失败"))
             return
         self.official = result["official"]
@@ -664,7 +664,7 @@ class UpdaterApp:
     def _on_npm_update_done(self, result, err):
         self._set_busy(False)
         if err is not None:
-            messagebox.showerror(APP_TITLE, t("npm 更新失败：\\n{err}", err=err))
+            messagebox.showerror(APP_TITLE, t("npm 更新失败：\n{err}", err=err))
             self._set_status(t("npm 更新失败"))
             self._prog_reset(t("npm 更新失败"))
             return
@@ -759,13 +759,13 @@ class UpdaterApp:
     def _on_source_update_done(self, result, err):
         self._set_busy(False)
         if err is not None:
-            messagebox.showerror(APP_TITLE, t("更新失败：\\n{err}", err=err))
+            messagebox.showerror(APP_TITLE, t("更新失败：\n{err}", err=err))
             self._set_status(t("更新失败"))
             self._prog_reset(t("更新失败"))
             return
         msg = result.get("message", t("更新完成"))
         if result.get("backup"):
-            msg += t("\\n\\n原目录备份于：\\n{p1}", p1=result['backup'])
+            msg += t("\n\n原目录备份于：\n{p1}", p1=result['backup'])
         messagebox.showinfo(APP_TITLE, msg)
         self._set_status(t("更新完成"))
         self._prog_done(t("更新完成"))
@@ -1236,7 +1236,7 @@ class UpdaterApp:
             for it in skills["items"]:
                 w.writerow([it["name"], it["version"], it["size"], it["size_text"], it["path"]])
         wrote.append("dsh_skills.csv")
-        messagebox.showinfo(APP_TITLE, t("已导出：\\n") + "\n".join(str(base / n) for n in wrote))
+        messagebox.showinfo(APP_TITLE, t("已导出：\n") + "\n".join(str(base / n) for n in wrote))
 
     # ---------------- 设置 ----------------
     def show_settings(self):
@@ -1477,7 +1477,7 @@ class UpdaterApp:
         if grade == "unstable":
             head += t("\n   ⚠ 未能在官网核实该版本 —— 视为【不稳定版】，请谨慎使用")
         if reason:
-            head += t("\\n   依据：{reason}", reason=reason)
+            head += t("\n   依据：{reason}", reason=reason)
         return head
 
     def _kind_tip_text(self, inst: dict) -> str:
@@ -1520,7 +1520,7 @@ class UpdaterApp:
 
     def _nature_tip_text(self, inst: dict) -> str:
         ver = inst.get("version") or "—"
-        return t("当前版本 {ver}\\n\\n{p1}", ver=ver, p1=self._stability_line(inst))
+        return t("当前版本 {ver}\n\n{p1}", ver=ver, p1=self._stability_line(inst))
 
     def _status_tip_text(self, inst: dict) -> str:
         status = inst.get("status", "—")
@@ -1532,7 +1532,7 @@ class UpdaterApp:
         elif status == t("已是最新"):
             base = t("当前版本 {ver} 与官方一致，无需更新。", ver=ver)
         else:
-            base = t("状态：{status}\\n（版本信息：{ver}）", status=status, ver=ver)
+            base = t("状态：{status}\n（版本信息：{ver}）", status=status, ver=ver)
         # 若该版本不稳定，追加醒目提示
         grade = inst.get("grade", "")
         if grade == "unstable":

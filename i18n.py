@@ -239,6 +239,14 @@ TABLES["ko"] = {
 # ---------------------------------------------------------------------------
 # 语言解析
 # ---------------------------------------------------------------------------
+# 批量翻译数据放在 i18n_data.py（按语言分批 update，便于增量补齐）。
+# 这里的 TABLES 作为基础，i18n_data 里的条目优先。
+from i18n_data import TABLES as _DATA_TABLES
+
+for _lang, _tbl in _DATA_TABLES.items():
+    TABLES.setdefault(_lang, {}).update(_tbl)
+
+
 def normalize_language(raw: str | None) -> str | None:
     """把各种系统写法归一成我们的语言码；识别不了返回 None。"""
     if not raw:
