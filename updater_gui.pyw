@@ -19,7 +19,7 @@ import updater_core as core
 import i18n
 from i18n import t
 
-APP_TITLE = t("DeepSeek Harness 自动检测与更新器")
+APP_TITLE = "DeepSeek Harness 自动检测与更新器"
 APP_VERSION = "0.7.0"
 
 
@@ -82,33 +82,33 @@ ACCENT_SKILL = {"light": "#6a1b9a", "dark": "#bb86fc"}
 # 各安装类型在此程序浮窗中的说明
 KIND_INFO = {
     core.INSTALL_KIND_SOURCE: {
-        "badge": t("源码检出"),
-        "title": t("源码检出 · Source Checkout"),
-        "what": t("DeepSeek Harness 的完整开源源码工程（package.json: @deepseek-ai/dsh-root）。"
-                "一般来自 git clone 或 GitHub 源码 zip 解压，包含 apps/cli 等全部源码。"),
-        "role": t("程序主体。可从该目录直接启动 DSH（如 tsx 运行 apps/cli/src/bin.ts 的 Web UI），"
-                "内置 dsh-* 插件包大多源自这里的 packages 工程。"),
-        "how": t("对比 GitHub master 源码；更新方式：下载官方源码 zip → 自动备份原目录 → 整目录替换"
-               "（node_modules/.git 会保留并移回，可勾选随后 pnpm install）。"),
+        "badge": "源码检出",
+        "title": "源码检出 · Source Checkout",
+        "what": "DeepSeek Harness 的完整开源源码工程（package.json: @deepseek-ai/dsh-root）。"
+                "一般来自 git clone 或 GitHub 源码 zip 解压，包含 apps/cli 等全部源码。",
+        "role": "程序主体。可从该目录直接启动 DSH（如 tsx 运行 apps/cli/src/bin.ts 的 Web UI），"
+                "内置 dsh-* 插件包大多源自这里的 packages 工程。",
+        "how": "对比 GitHub master 源码；更新方式：下载官方源码 zip → 自动备份原目录 → 整目录替换"
+               "（node_modules/.git 会保留并移回，可勾选随后 pnpm install）。",
         "ref": "GitHub master",
     },
     core.INSTALL_KIND_NPM: {
-        "badge": t("npm 全局"),
-        "title": t("npm 全局安装 · @deepseek-ai/dsh"),
-        "what": t("通过 npm 全局安装的 dsh 命令行工具包（node_modules/@deepseek-ai/dsh）。"),
-        "role": t("提供 dsh 命令（CLI 入口）：初始化/管理 profile、运行 `dsh web` 启动 Web UI、"
-                "加载当前安装的运行时插件。"),
-        "how": t("对比 npm registry 的 latest 发布版；更新方式：npm install -g @deepseek-ai/dsh@latest。"),
+        "badge": "npm 全局",
+        "title": "npm 全局安装 · @deepseek-ai/dsh",
+        "what": "通过 npm 全局安装的 dsh 命令行工具包（node_modules/@deepseek-ai/dsh）。",
+        "role": "提供 dsh 命令（CLI 入口）：初始化/管理 profile、运行 `dsh web` 启动 Web UI、"
+                "加载当前安装的运行时插件。",
+        "how": "对比 npm registry 的 latest 发布版；更新方式：npm install -g @deepseek-ai/dsh@latest。",
         "ref": "npm latest",
     },
     core.INSTALL_KIND_PROFILE: {
-        "badge": t("运行时 profile"),
-        "title": t("运行时 Profile · 插件装载实例"),
-        "what": t("DSH_HOME（默认 ~/.dsh/profiles/<name>）下的运行实例，以 pnpm workspace 形态管理"
-                "该 profile 启用的插件清单（package.json 的 dsh.profile.bundles）与本地配置。"),
-        "role": t("决定某次启动加载哪些插件（Web / ACP / SDK 等 profile 模板），是插件在“运行时”"
-                "层面的宿主目录，随 dsh CLI / 源码安装自动生成。"),
-        "how": t("本身不单独更新：升级其来源（npm 全局 dsh 或源码检出）后，重启 DSH 即用新版。"),
+        "badge": "运行时 profile",
+        "title": "运行时 Profile · 插件装载实例",
+        "what": "DSH_HOME（默认 ~/.dsh/profiles/<name>）下的运行实例，以 pnpm workspace 形态管理"
+                "该 profile 启用的插件清单（package.json 的 dsh.profile.bundles）与本地配置。",
+        "role": "决定某次启动加载哪些插件（Web / ACP / SDK 等 profile 模板），是插件在“运行时”"
+                "层面的宿主目录，随 dsh CLI / 源码安装自动生成。",
+        "how": "本身不单独更新：升级其来源（npm 全局 dsh 或源码检出）后，重启 DSH 即用新版。",
         "ref": "npm latest",
     },
 }
@@ -182,7 +182,7 @@ class Worker:
 class UpdaterApp:
     def __init__(self, root: tk.Tk):
         self.root = root
-        root.title(f"{APP_TITLE} v{APP_VERSION}")
+        root.title(f"{t(APP_TITLE)} v{APP_VERSION}")
         # 高度按实际内容取：底部状态栏（含版本号）与日志区都要放得下，
         # 否则 pack 会把排在后面的部件完全挤掉（见 _build_ui 里的说明）。
         root.geometry("1020x700")
@@ -222,7 +222,7 @@ class UpdaterApp:
         i18n.set_language(str(self.settings.get("language") or i18n.AUTO))
         self._setup_style()
         self._build_ui()
-        self._log(f"{APP_TITLE} 已启动。\nDSH 数据目录：{core.DSH_HOME}\n"
+        self._log(f"{t(APP_TITLE)} 已启动。\nDSH 数据目录：{core.DSH_HOME}\n"
                   f"设置文件：{core.preferences_file()}")
         self._log(t("正在自动检测本机安装与官方版本…"))
         # 右上角先用缓存里的版本与上次检测时间填充
@@ -599,7 +599,7 @@ class UpdaterApp:
     def _on_detect_done(self, result, err):
         self._set_busy(False)
         if err is not None:
-            messagebox.showerror(APP_TITLE, t("检测失败：\n{err}", err=err))
+            messagebox.showerror(t(APP_TITLE), t("检测失败：\n{err}", err=err))
             self._set_status(t("检测失败"))
             return
         # 缓存本次检测结果，供下次启动时先显示（含检测时间）
@@ -614,9 +614,9 @@ class UpdaterApp:
         gh_assess = gh.get("assess") or {}
         npm_assess = npm.get("assess") or {}
         if gh_assess.get("grade") in ("prerelease", "unstable"):
-            gh_txt += t("〔{p1}〕", p1=gh_assess.get('grade_label', ''))
+            gh_txt += t("〔{p1}〕", p1=core.grade_label_of(gh_assess.get('grade', '')))
         if npm_assess.get("grade") in ("prerelease", "unstable", "candidate"):
-            npm_txt += t("〔{p1}〕", p1=npm_assess.get('grade_label', ''))
+            npm_txt += t("〔{p1}〕", p1=core.grade_label_of(npm_assess.get('grade', '')))
         self.lbl_github.configure(text=t("🌐 官方 GitHub master：{gh_txt}", gh_txt=gh_txt))
         self.lbl_npm.configure(text=t("📦 npm 发布版：{npm_txt}", npm_txt=npm_txt))
 
@@ -628,7 +628,8 @@ class UpdaterApp:
                 ref = gh.get("version") or ""
             else:
                 ref = npm.get("version") or ""
-            nature = inst.get("grade_label", "—")
+            _g = (inst.get("assess") or {}).get("grade") or inst.get("grade", "")
+            nature = core.grade_label_of(_g) or inst.get("grade_label") or "—"
             row = (self._kind_label(inst), inst["path"], inst["version"] or "—",
                    nature, ref or "—", inst.get("status", "—"))
             tag = self._row_tag(inst)
@@ -685,7 +686,7 @@ class UpdaterApp:
     def _selected_install(self):
         sel = self.tree.selection()
         if not sel:
-            messagebox.showinfo(APP_TITLE, t("请先在列表中选中一行安装。"))
+            messagebox.showinfo(t(APP_TITLE), t("请先在列表中选中一行安装。"))
             return None
         for r in self.install_rows:
             if r["iid"] == sel[0]:
@@ -704,14 +705,14 @@ class UpdaterApp:
             self._confirm_source_update(inst)
         else:
             messagebox.showinfo(
-                APP_TITLE,
+                t(APP_TITLE),
                 t("「运行时 profile」无需单独更新：它由源码/CLI 安装提供。\n"
                 "请更新其对应的源码检出或 npm 全局安装。"),
             )
 
     def _confirm_npm_update(self, inst):
         if not messagebox.askyesno(
-            APP_TITLE,
+            t(APP_TITLE),
             f"将更新 npm 全局安装：\n{inst['path']}\n"
             f"当前版本：{inst['version'] or '—'}\n"
             f"将执行：npm install -g @deepseek-ai/dsh@latest\n\n"
@@ -731,11 +732,11 @@ class UpdaterApp:
     def _on_npm_update_done(self, result, err):
         self._set_busy(False)
         if err is not None:
-            messagebox.showerror(APP_TITLE, t("npm 更新失败：\n{err}", err=err))
+            messagebox.showerror(t(APP_TITLE), t("npm 更新失败：\n{err}", err=err))
             self._set_status(t("npm 更新失败"))
             self._prog_reset(t("npm 更新失败"))
             return
-        messagebox.showinfo(APP_TITLE, result.get("message", t("npm 更新完成")))
+        messagebox.showinfo(t(APP_TITLE), result.get("message", t("npm 更新完成")))
         self._set_status(t("npm 更新完成"))
         self._prog_done(t("npm 更新完成"))
         self.refresh_all()
@@ -764,7 +765,7 @@ class UpdaterApp:
         gh_assess = gh.get("assess") or {}
         if gh_assess.get("grade"):
             notes = []
-            gl = gh_assess.get("grade_label", "")
+            gl = core.grade_label_of(gh_assess.get("grade", ""))
             if gh_assess.get("grade") == "stable":
                 notes.append(t("官方最新 {ref} 为【{gl}】。", ref=ref, gl=gl))
             elif gh_assess.get("grade") == "candidate":
@@ -826,14 +827,14 @@ class UpdaterApp:
     def _on_source_update_done(self, result, err):
         self._set_busy(False)
         if err is not None:
-            messagebox.showerror(APP_TITLE, t("更新失败：\n{err}", err=err))
+            messagebox.showerror(t(APP_TITLE), t("更新失败：\n{err}", err=err))
             self._set_status(t("更新失败"))
             self._prog_reset(t("更新失败"))
             return
         msg = result.get("message", t("更新完成"))
         if result.get("backup"):
             msg += t("\n\n原目录备份于：\n{p1}", p1=result['backup'])
-        messagebox.showinfo(APP_TITLE, msg)
+        messagebox.showinfo(t(APP_TITLE), msg)
         self._set_status(t("更新完成"))
         self._prog_done(t("更新完成"))
         self.refresh_all()
@@ -894,12 +895,12 @@ class UpdaterApp:
         """
         sel = tree.selection()
         if not sel:
-            messagebox.showinfo(APP_TITLE, t("请先在列表中选中一行安装。"))
+            messagebox.showinfo(t(APP_TITLE), t("请先在列表中选中一行安装。"))
             return
         item = getattr(tree, "_item_map", {}).get(sel[0]) or {}
         url = core.source_url_for(item, kind)
         if not url:
-            messagebox.showinfo(APP_TITLE, t(
+            messagebox.showinfo(t(APP_TITLE), t(
                 "这条没有可识别的下载来源：技能需要带 .git 来源，插件需要是 npm 包。"))
             return
         name = str(item.get("name") or "")
@@ -1313,7 +1314,7 @@ class UpdaterApp:
             plugins = core.scan_plugins(include_core=True)
             skills = core.scan_skills()
         except Exception as e:  # noqa: BLE001
-            messagebox.showerror(APP_TITLE, t("扫描失败：{e}", e=e))
+            messagebox.showerror(t(APP_TITLE), t("扫描失败：{e}", e=e))
             return
         wrote = []
         with open(base / "dsh_plugins.csv", "w", newline="", encoding="utf-8-sig") as f:
@@ -1329,14 +1330,14 @@ class UpdaterApp:
             for it in skills["items"]:
                 w.writerow([it["name"], it["version"], it["size"], it["size_text"], it["path"]])
         wrote.append("dsh_skills.csv")
-        messagebox.showinfo(APP_TITLE, t("已导出：\n") + "\n".join(str(base / n) for n in wrote))
+        messagebox.showinfo(t(APP_TITLE), t("已导出：\n") + "\n".join(str(base / n) for n in wrote))
 
     # ---------------- 设置 ----------------
     def show_settings(self):
         env = core.DSH_HOME
         skills_root = core.scan_skills().get("root", "")
         messagebox.showinfo(
-            APP_TITLE,
+            t(APP_TITLE),
             t("DSH 数据目录（DSH_HOME）：\n{p1}\n\n技能目录：\n{p2}\n\n本更新器设置文件：\n{p3}\n\n提示：可通过环境变量 DSH_HOME / DSH_SKILLS 更改检测位置。",
               p1=env, p2=skills_root, p3=core.preferences_file()),
         )
@@ -1573,7 +1574,9 @@ class UpdaterApp:
         """返回稳定性/适配性的展示文本。"""
         assess = inst.get("assess") or {}
         grade = assess.get("grade", inst.get("grade", ""))
-        label = assess.get("grade_label", inst.get("grade_label", ""))
+        label = core.grade_label_of(grade) or assess.get("grade_label", "")
+        if label and not grade:
+            label = assess.get("grade_label", inst.get("grade_label", ""))
         reason = assess.get("reason", "")
         color_note = {"stable": "✅", "candidate": "🟠", "prerelease": "🟣", "unstable": "🛑"}.get(grade, "")
         head = t("◉ 版本性质：{label} {color_note}", label=label, color_note=color_note) if with_title else f"{label} {color_note}"
@@ -1599,18 +1602,18 @@ class UpdaterApp:
             need = inst.get("status") in (t("可更新"), t("可更新(npm)"))
         recent = gh.get("recent") or []
         lines = [
-            t("【{p1}】", p1=info['title']),
+            t("【{p1}】", p1=t(info['title'])),
             "",
-            t("◉ 这是什么：{p1}", p1=info['what']),
+            t("◉ 这是什么：{p1}", p1=t(info['what'])),
             "",
-            t("◉ 在 DSH 中作用：{p1}", p1=info['role']),
+            t("◉ 在 DSH 中作用：{p1}", p1=t(info['role'])),
             "",
-            t("◉ 版本：本地 {local}   ∥   官方({p1}) {ref}", local=local, p1=info['ref'], ref=ref),
+            t("◉ 版本：本地 {local}   ∥   官方({p1}) {ref}", local=local, p1=t(info['ref']), ref=ref),
             t("◉ 是否需要立即更新：{p1}", p1=t('是，有可用更新') if need else t('否，已是最新')),
             "",
             self._stability_line(inst),
             "",
-            t("◉ 更新方式：{p1}", p1=info['how']),
+            t("◉ 更新方式：{p1}", p1=t(info['how'])),
         ]
         if need and recent:
             lines.append("")

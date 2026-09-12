@@ -672,3 +672,44 @@ def test_source_url_for_returns_empty_when_unknown(monkeypatch, tmp_path):
     monkeypatch.setenv("DSH_UPDATER_SETTINGS_DIR", str(tmp_path))
     assert core.source_url_for({"name": "", "path": ""}, "skill") == ""
     assert core.source_url_for({}, "plugin") == ""
+
+
+# ---------------------------------------------------------------------------
+# 多语言：禁止模块级翻译调用
+# ---------------------------------------------------------------------------
+def test_no_module_level_translation_calls():
+    """模块级的 t() 会在 import 时求值，那时语言还没从设置里加载，
+    结果会被永久冻死在导入时的语言上。
+
+    这是实际踩过的坑：GRADE_LABELS 的取值曾被包成 t("稳定版")，
+    表现为「版本性质」列显示成上一次会话的语言（如日文），
+    而界面其余部分是当前语言。此处做回归防护。
+    """
+    import ast
+    bad = []
+    for fname in ("updater_core.py", "updater_gui.pyw"):
+        tree = ast.parse((REPO_ROOT / fname).read_text(encoding="utf-8"))
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue                      # 函数/类体内可以用 t()
+            for sub in ast.walk(node):
+                if (isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name)
+                        and sub.func.id == "t"):
+                    bad.append(f"{fname}:{sub.lineno}")
+    assert not bad, "模块级不得调用 t()（会在导入时冻结语言）：" + ", ".join(bad)
+
+
+def test_grade_label_follows_current_language():
+    """版本性质标签必须按当前语言即时翻译。"""
+    old = i18n.get_language()
+    try:
+        i18n.set_language("ja")
+        assert core.grade_label_of("stable") == "安定版"
+        i18n.set_language("en")
+        assert core.grade_label_of("stable") == "Stable"
+        i18n.set_language("zh-CN")
+        assert core.grade_label_of("stable") == "稳定版"
+        assert core.grade_label_of("") == ""
+        assert core.grade_label_of("unknown-grade") == "不稳定版"
+    finally:
+        i18n.set_language(old)

@@ -134,12 +134,24 @@ def compare_versions(a: str, b: str) -> int:
 #   candidate  官方发布候选（rc 后缀，且出现在官方 tags/npm 版本里）
 #   prerelease 预发布（alpha/beta 后缀）
 #   unstable   官网信息缺乏或无法核实的“不稳定版”（找不到对应官方记录）
+# 注意：这里只放中文原文，**不要**在模块级调用 t()。
+# 模块级 t() 在 import 时就求值，那时语言还没从设置里加载，结果会被
+# 永久冻死在导入时的语言上（表现为界面里混入其它语言）。
+# 展示时一律用 grade_label_of() 按当前语言即时翻译。
 GRADE_LABELS = {
-    "stable": t("稳定版"),
-    "candidate": t("候选版 rc"),
-    "prerelease": t("预发布 alpha"),
-    "unstable": t("不稳定版"),
+    "stable": "稳定版",
+    "candidate": "候选版 rc",
+    "prerelease": "预发布 alpha",
+    "unstable": "不稳定版",
 }
+
+
+def grade_label_of(grade: str) -> str:
+    """把分级标识翻成当前语言的展示文本（缓存里不该存翻译结果）。"""
+    g = str(grade or "")
+    if not g:
+        return ""
+    return t(GRADE_LABELS.get(g, "不稳定版"))
 
 def _grade_by_suffix(version: str) -> str:
     """按版本号后缀粗分级（用于本地版本还没有官网对照时）。"""
@@ -231,7 +243,7 @@ def assess_version(version: str, official: dict | None, kind_for_ref: str = "npm
     return {
         "version": v,
         "grade": grade,
-        "grade_label": GRADE_LABELS.get(grade, t("不稳定版")),
+        "grade_label": grade_label_of(grade),
         "reason": t("；").join(dict.fromkeys(reason_parts)),
         "in_official": in_official,
         "is_official_latest": is_latest,
