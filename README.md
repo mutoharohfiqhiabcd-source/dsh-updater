@@ -151,3 +151,9 @@ copy /Y updater_gui.pyw updater_core.py dsh_updater.ico 目标目录\
 3635135075@qq.com
 - 或者是直接到我的B站账号里私信（有的时候可能会很长一段时间才会回复）
 - 目前准备制作对应的“一键部署版本”
+
+---
+
+## English
+
+An English overview of this project is available in **[README.en.md](README.en.md)** (features, the two editions, where local data is stored, and known limitations).
