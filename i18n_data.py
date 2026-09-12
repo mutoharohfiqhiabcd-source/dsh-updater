@@ -280,3 +280,8 @@ from i18n_extra import EXTRA as _EXTRA
 
 for _lang, _tbl in _EXTRA.items():
     TABLES.setdefault(_lang, {}).update(_tbl)
+
+from i18n_missing import TABLES_EXTRA as _MISSING
+
+for _lang, _tbl in _MISSING.items():
+    TABLES.setdefault(_lang, {}).update(_tbl)

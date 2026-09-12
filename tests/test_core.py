@@ -713,3 +713,29 @@ def test_grade_label_follows_current_language():
         assert core.grade_label_of("unknown-grade") == "不稳定版"
     finally:
         i18n.set_language(old)
+
+
+def test_kind_info_strings_exist_in_tables():
+    """KIND_INFO 的值是**折行拼接后的整串**，必须以完整字符串作为键存在于表里。
+
+    这是实际踩过的坑：按 token 提取时会得到各段而不是整条，
+    结果整条查不到译文、浮窗回退中文（用户报告「切换语言后类型说明浮窗
+    还是一样」）。
+    """
+    import importlib.machinery
+    import importlib.util
+    loader = importlib.machinery.SourceFileLoader(
+        "updater_gui_probe", str(REPO_ROOT / "updater_gui.pyw"))
+    mod = importlib.util.module_from_spec(
+        importlib.util.spec_from_loader("updater_gui_probe", loader))
+    loader.exec_module(mod)
+    missing = []
+    for kind, info in mod.KIND_INFO.items():
+        for field in ("badge", "title", "what", "role", "how"):
+            val = info.get(field)
+            if not val:
+                continue
+            for code in ("zh-TW", "en", "ja", "ko"):
+                if val not in i18n.TABLES.get(code, {}):
+                    missing.append(f"{code}:{kind}:{field}")
+    assert not missing, "KIND_INFO 文案缺翻译：" + ", ".join(sorted(set(missing)))
