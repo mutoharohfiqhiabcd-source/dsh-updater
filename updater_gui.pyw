@@ -223,7 +223,7 @@ class UpdaterApp:
         self._setup_style()
         self._build_ui()
         self._log(f"{APP_TITLE} 已启动。\nDSH 数据目录：{core.DSH_HOME}\n"
-                  f"设置文件：{core.settings_file()}")
+                  f"设置文件：{core.preferences_file()}")
         self._log(t("正在自动检测本机安装与官方版本…"))
         # 右上角先用缓存里的版本与上次检测时间填充
         self._render_cached_official()
@@ -500,6 +500,22 @@ class UpdaterApp:
         self.txt.see("end")
         self.txt.configure(state="disabled")
 
+    @staticmethod
+    def _kind_label(inst: dict) -> str:
+        """按当前语言即时计算安装类型标签。
+
+        缓存里只保留稳定的 kind 标识，不存翻译后的文本——否则换语言后
+        缓存里的旧语言标签会和新界面混排。
+        """
+        kind = inst.get("kind")
+        if kind == core.INSTALL_KIND_SOURCE:
+            return t("源码检出")
+        if kind == core.INSTALL_KIND_NPM:
+            return t("npm 全局")
+        if kind == core.INSTALL_KIND_PROFILE:
+            return t("运行时 profile ({p1})", p1=Path(str(inst.get("path", ""))).name)
+        return str(inst.get("kind_label") or kind or t("未知类型。"))
+
     def _set_status(self, text: str):
         self.status.configure(text=text)
 
@@ -613,7 +629,7 @@ class UpdaterApp:
             else:
                 ref = npm.get("version") or ""
             nature = inst.get("grade_label", "—")
-            row = (inst["kind_label"], inst["path"], inst["version"] or "—",
+            row = (self._kind_label(inst), inst["path"], inst["version"] or "—",
                    nature, ref or "—", inst.get("status", "—"))
             tag = self._row_tag(inst)
             iid = self.tree.insert("", "end", values=row, tags=(tag,))
@@ -1322,7 +1338,7 @@ class UpdaterApp:
         messagebox.showinfo(
             APP_TITLE,
             t("DSH 数据目录（DSH_HOME）：\n{p1}\n\n技能目录：\n{p2}\n\n本更新器设置文件：\n{p3}\n\n提示：可通过环境变量 DSH_HOME / DSH_SKILLS 更改检测位置。",
-              p1=env, p2=skills_root, p3=core.settings_file()),
+              p1=env, p2=skills_root, p3=core.preferences_file()),
         )
 
     # ---------------- 偏好设置 ----------------
@@ -1370,7 +1386,7 @@ class UpdaterApp:
 
     def _open_settings_file(self):
         """打开设置文件；文件还不存在时退而打开它所在的目录。"""
-        target = core.settings_file()
+        target = core.preferences_file()
         try:
             if not target.exists():
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -1392,7 +1408,7 @@ class UpdaterApp:
             self._log(t("偏好已保存：GPU 加速 = {state}（仅本地记录，DSH 暂无对应选项）", state=state))
             self._set_status(t("偏好已保存：GPU 加速 {state}", state=state))
         else:
-            self._log(f"⚠ 偏好保存失败（{core.settings_file()} 不可写）："
+            self._log(f"⚠ 偏好保存失败（{core.preferences_file()} 不可写）："
                       f"GPU 加速 = {state}，本次选择仅当前会话有效")
             self._set_status(t("偏好保存失败，详见日志"))
 

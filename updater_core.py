@@ -1654,6 +1654,72 @@ def update_npm_global(pkg_dir: Path, log=print) -> dict:
     return {"ok": True, "new_version": ver, "message": t("npm 全局更新完成，版本：{p1}", p1=ver or '?')}
 
 
+def preferences_file() -> Path:
+    """统一的本地信息文件（类似游戏的「玩家偏好」档）。
+
+    结构：{"schema": 1, "settings": {...}, "cache": {...}, "sources": {...}}
+    原先分散的 settings.json / cache.json / sources.json 会自动迁移过来
+    （只迁移一次，旧文件保留不删，便于回退）。
+    """
+    return _settings_dir() / "preferences.json"
+
+
+def _legacy_path(name: str) -> Path:
+    return _settings_dir() / name
+
+
+_EMPTY_PREFS = {"schema": 1, "settings": {}, "cache": {}, "sources": {}}
+
+
+def _read_json(path: Path) -> dict:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except Exception:  # noqa: BLE001
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def read_preferences() -> dict:
+    """读取统一偏好档；不存在时尝试从旧文件迁移一次。"""
+    out = {k: (dict(v) if isinstance(v, dict) else v) for k, v in _EMPTY_PREFS.items()}
+    data = _read_json(preferences_file())
+    if data:
+        for key in ("settings", "cache", "sources"):
+            if isinstance(data.get(key), dict):
+                out[key] = data[key]
+        if isinstance(data.get("schema"), int):
+            out["schema"] = data["schema"]
+        return out
+
+    # 首次运行或旧版升级：把旧文件内容搬进统一档
+    legacy = {"settings": _legacy_path("settings.json"),
+              "cache": _legacy_path("cache.json"),
+              "sources": _legacy_path("sources.json")}
+    migrated = False
+    for key, path in legacy.items():
+        got = _read_json(path)
+        if got:
+            out[key] = got
+            migrated = True
+    if migrated:
+        write_preferences(out)
+    return out
+
+
+def write_preferences(data: dict) -> bool:
+    """原子写入统一偏好档。失败返回 False 而不抛异常。"""
+    try:
+        target = preferences_file()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_name(target.name + ".tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2, default=str),
+                       encoding="utf-8")
+        os.replace(tmp, target)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 # ---------------------------------------------------------------------------
 # 本地偏好设置（持久化到用户配置目录）
 # ---------------------------------------------------------------------------
@@ -1691,13 +1757,7 @@ def load_settings() -> dict:
     避免把外部写入的垃圾数据带进程序。
     """
     out = dict(SETTINGS_DEFAULTS)
-    try:
-        raw = settings_file().read_text(encoding="utf-8", errors="replace")
-        data = json.loads(raw)
-    except Exception:  # noqa: BLE001
-        return out
-    if not isinstance(data, dict):
-        return out
+    data = read_preferences().get("settings") or {}
     for key, default in SETTINGS_DEFAULTS.items():
         if key in data and isinstance(data[key], type(default)):
             out[key] = data[key]
@@ -1706,16 +1766,9 @@ def load_settings() -> dict:
 
 def save_settings(data: dict) -> bool:
     """保存偏好设置（原子写入）。成功返回 True，失败返回 False 而不抛异常。"""
-    try:
-        target = settings_file()
-        target.parent.mkdir(parents=True, exist_ok=True)
-        tmp = target.with_name(target.name + ".tmp")
-        tmp.write_text(json.dumps(dict(data), ensure_ascii=False, indent=2),
-                       encoding="utf-8")
-        os.replace(tmp, target)
-        return True
-    except Exception:  # noqa: BLE001
-        return False
+    prefs = read_preferences()
+    prefs["settings"] = dict(data)
+    return write_preferences(prefs)
 
 
 # ---------------------------------------------------------------------------
@@ -1742,17 +1795,9 @@ def save_detection_cache(result: dict, saved_at: str | None = None) -> str:
     用 default=str 兜底：检测结果里可能混有 Path 等非 JSON 类型。
     """
     stamp = saved_at or datetime.datetime.now().isoformat(timespec="seconds")
-    try:
-        target = cache_file()
-        target.parent.mkdir(parents=True, exist_ok=True)
-        tmp = target.with_name(target.name + ".tmp")
-        tmp.write_text(json.dumps({"saved_at": stamp, "result": result},
-                                  ensure_ascii=False, default=str),
-                       encoding="utf-8")
-        os.replace(tmp, target)
-        return stamp
-    except Exception:  # noqa: BLE001
-        return ""
+    prefs = read_preferences()
+    prefs["cache"] = {"saved_at": stamp, "result": result}
+    return stamp if write_preferences(prefs) else ""
 
 
 def load_detection_cache() -> dict:
@@ -1760,13 +1805,10 @@ def load_detection_cache() -> dict:
 
     文件缺失、损坏或结构不对时返回 {}，调用方据此走「无缓存」路径。
     """
-    try:
-        data = json.loads(cache_file().read_text(encoding="utf-8", errors="replace"))
-    except Exception:  # noqa: BLE001
+    cache = read_preferences().get("cache") or {}
+    if not isinstance(cache, dict) or not isinstance(cache.get("result"), dict):
         return {}
-    if not isinstance(data, dict) or not isinstance(data.get("result"), dict):
-        return {}
-    return data
+    return cache
 
 
 # ---------------------------------------------------------------------------
@@ -1831,10 +1873,7 @@ def git_remote_url(path: str | Path) -> str:
 
 def load_sources() -> dict:
     """读取「记住的来源」；损坏时返回 {}。"""
-    try:
-        data = json.loads(sources_file().read_text(encoding="utf-8", errors="replace"))
-    except Exception:  # noqa: BLE001
-        return {}
+    data = read_preferences().get("sources") or {}
     return data if isinstance(data, dict) else {}
 
 
@@ -1842,18 +1881,13 @@ def remember_source(key: str, url: str) -> bool:
     """记住某个条目的来源地址，便于以后再次打开或据此检测更新。"""
     if not key or not url:
         return False
-    try:
-        data = load_sources()
-        data[key] = {"url": url, "saved_at": datetime.datetime.now().isoformat(timespec="seconds")}
-        target = sources_file()
-        target.parent.mkdir(parents=True, exist_ok=True)
-        tmp = target.with_name(target.name + ".tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2, default=str),
-                       encoding="utf-8")
-        os.replace(tmp, target)
-        return True
-    except Exception:  # noqa: BLE001
-        return False
+    prefs = read_preferences()
+    data = prefs.get("sources")
+    if not isinstance(data, dict):
+        data = {}
+    data[key] = {"url": url, "saved_at": datetime.datetime.now().isoformat(timespec="seconds")}
+    prefs["sources"] = data
+    return write_preferences(prefs)
 
 
 def source_key(kind: str, name: str) -> str:
