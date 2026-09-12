@@ -269,3 +269,6 @@ TABLES["en"].update({
 from i18n_zh_tw import TABLE as _TABLE_ZH_TW
 
 TABLES["zh-TW"].update(_TABLE_ZH_TW)
+from i18n_ja import TABLE as _TABLE_JA
+
+TABLES["ja"].update(_TABLE_JA)
