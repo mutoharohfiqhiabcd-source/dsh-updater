@@ -530,3 +530,25 @@ for _lang, _pair in {
     })
 
 
+# 下载来源按钮相关文案（v0.7.0 新增）
+for _lang, _triple in {
+    "en": ("🔗 Open download source",
+           "No recognizable download source: skills need a .git origin; plugins must be npm packages.",
+           "Remembered source: {p1} → {p2}"),
+    "zh-TW": ("🔗 開啟下載來源",
+              "這條沒有可辨識的下載來源：技能需要帶 .git 來源，外掛需要是 npm 套件。",
+              "已記住來源：{p1} → {p2}"),
+    "ja": ("🔗 ダウンロード元を開く",
+           "認識できるダウンロード元がありません：スキルは .git 由来、プラグインは npm パッケージである必要があります。",
+           "取得元を記憶しました：{p1} → {p2}"),
+    "ko": ("🔗 다운로드 출처 열기",
+           "인식할 수 있는 다운로드 출처가 없습니다: 스킬은 .git 출처, 플러그인은 npm 패키지여야 합니다.",
+           "출처를 기억했습니다: {p1} → {p2}"),
+}.items():
+    EXTRA[_lang].update({
+        "🔗 打开下载来源": _triple[0],
+        "这条没有可识别的下载来源：技能需要带 .git 来源，插件需要是 npm 包。": _triple[1],
+        "已记住来源：{p1} → {p2}": _triple[2],
+    })
+
+

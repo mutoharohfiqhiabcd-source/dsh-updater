@@ -820,6 +820,7 @@ class UpdaterApp:
             latest_fn=core.check_plugin_latest,
             update_fn=None,  # 插件更新=更新对应 dsh/运行时，见 update_selected
             update_label=t("⬇ 同步更新"),
+            kind="plugin",
         )
 
     def open_skills(self):
@@ -844,10 +845,31 @@ class UpdaterApp:
             update_label=t("⬇ git 同步更新"),
         )
 
+    def _open_item_source(self, tree, kind: str) -> None:
+        """打开所选插件/技能的下载来源，并记住它以便日后据此检测更新。
+
+        插件本质是 npm 包 → npm 包页；技能没有官方市场 → 回溯其 git 来源。
+        两者都取不到时明确提示，而不是静默无反应。
+        """
+        sel = tree.selection()
+        if not sel:
+            messagebox.showinfo(APP_TITLE, t("请先在列表中选中一行安装。"))
+            return
+        item = getattr(tree, "_item_map", {}).get(sel[0]) or {}
+        url = core.source_url_for(item, kind)
+        if not url:
+            messagebox.showinfo(APP_TITLE, t(
+                "这条没有可识别的下载来源：技能需要带 .git 来源，插件需要是 npm 包。"))
+            return
+        name = str(item.get("name") or "")
+        if core.remember_source(core.source_key(kind, name), url):
+            self._log(t("已记住来源：{p1} → {p2}", p1=name, p2=url))
+        self._open_url(url)
+
     def _open_inventory_window(self, name, title, reopen, accent, accent_label,
                                columns, widths, scan_fn, scan_kwargs, row_of,
                                detail_of, latest_fn=None, update_fn=None,
-                               update_label=None):
+                               update_label=None, kind="skill"):
         win = tk.Toplevel(self.root)
         win.title(f"{title} · {APP_VERSION} · {accent_label}")
         win.geometry("1080x640")
@@ -874,6 +896,10 @@ class UpdaterApp:
         # 操作按钮组（右）
         right = ttk.Frame(toprow)
         right.pack(side="right")
+        # 打开下载来源：插件→npm 包页，技能→其 git 仓库；打开后记住来源
+        btn_src = ttk.Button(right, text=t("🔗 打开下载来源"),
+                             command=lambda: self._open_item_source(tree, kind))
+        btn_src.pack(side="left", padx=(0, 6))
         if latest_fn is not None:
             btn_latest = ttk.Button(right, text=t("🔍 检测最新版"),
                                     style=accent_style,

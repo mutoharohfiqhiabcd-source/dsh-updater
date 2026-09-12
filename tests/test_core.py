@@ -607,3 +607,68 @@ def test_save_detection_cache_handles_unserializable_values(monkeypatch, tmp_pat
     monkeypatch.setenv("DSH_UPDATER_SETTINGS_DIR", str(tmp_path))
     assert core.save_detection_cache({"path": tmp_path}) != ""
     assert core.load_detection_cache()["result"]["path"] == str(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# 插件 / 技能的下载来源
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("name,expected", [
+    ("dsh-whale-widget", "https://www.npmjs.com/package/dsh-whale-widget"),
+    ("@deepseek-ai/dsh-base", "https://www.npmjs.com/package/@deepseek-ai/dsh-base"),
+    ("", ""), ("（未指定）", ""), ("—", ""),
+])
+def test_npm_url_for(name, expected):
+    assert core.npm_url_for(name) == expected
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("git@github.com:user/repo.git", "https://github.com/user/repo"),
+    ("ssh://git@github.com/user/repo.git", "https://github.com/user/repo"),
+    ("https://github.com/user/repo", "https://github.com/user/repo"),
+    ("https://github.com/user/repo.git", "https://github.com/user/repo"),
+    ("", ""),
+])
+def test_normalize_git_url(raw, expected):
+    assert core.normalize_git_url(raw) == expected
+
+
+def test_git_remote_url_returns_empty_for_non_git_dir(tmp_path):
+    assert core.git_remote_url(tmp_path) == ""
+    assert core.git_remote_url(tmp_path / "nope") == ""
+
+
+def test_remember_source_roundtrip(monkeypatch, tmp_path):
+    monkeypatch.setenv("DSH_UPDATER_SETTINGS_DIR", str(tmp_path))
+    assert core.load_sources() == {}
+    key = core.source_key("skill", "my-skill")
+    assert core.remember_source(key, "https://example.com/skill") is True
+    saved = core.load_sources()
+    assert saved[key]["url"] == "https://example.com/skill"
+
+
+def test_remember_source_rejects_empty(monkeypatch, tmp_path):
+    monkeypatch.setenv("DSH_UPDATER_SETTINGS_DIR", str(tmp_path))
+    assert core.remember_source("", "https://x") is False
+    assert core.remember_source("k", "") is False
+
+
+def test_source_url_for_plugin_uses_npm_page(monkeypatch, tmp_path):
+    monkeypatch.setenv("DSH_UPDATER_SETTINGS_DIR", str(tmp_path))
+    item = {"name": "dsh-whale-widget", "path": str(tmp_path)}
+    assert core.source_url_for(item, "plugin") == \
+        "https://www.npmjs.com/package/dsh-whale-widget"
+
+
+def test_source_url_for_skill_falls_back_to_remembered(monkeypatch, tmp_path):
+    """技能没有 git 来源时，应退回此前记住的来源。"""
+    monkeypatch.setenv("DSH_UPDATER_SETTINGS_DIR", str(tmp_path))
+    item = {"name": "my-skill", "path": str(tmp_path)}          # tmp_path 不是 git 仓库
+    assert core.source_url_for(item, "skill") == ""
+    core.remember_source(core.source_key("skill", "my-skill"), "https://example.com/s")
+    assert core.source_url_for(item, "skill") == "https://example.com/s"
+
+
+def test_source_url_for_returns_empty_when_unknown(monkeypatch, tmp_path):
+    monkeypatch.setenv("DSH_UPDATER_SETTINGS_DIR", str(tmp_path))
+    assert core.source_url_for({"name": "", "path": ""}, "skill") == ""
+    assert core.source_url_for({}, "plugin") == ""

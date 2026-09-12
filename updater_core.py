@@ -1770,6 +1770,126 @@ def load_detection_cache() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# 插件 / 技能的下载来源
+# ---------------------------------------------------------------------------
+# 插件本质是 npm 包，所以「下载页」就是 npm 包页；技能没有官方市场，
+# 只能回溯它自己的 git 来源。两者都拿不到时，退回用户此前记住的来源。
+NPM_PACKAGE_URL = "https://www.npmjs.com/package/"
+
+
+def sources_file() -> Path:
+    """「记住的来源」存储文件（与设置同目录）。"""
+    return _settings_dir() / "sources.json"
+
+
+def normalize_git_url(url: str) -> str:
+    """把 ssh 形式的 git 地址转成可在浏览器打开的 https 地址。"""
+    u = (url or "").strip()
+    if not u:
+        return ""
+    if u.startswith("git@") and ":" in u:
+        host, path = u[4:].split(":", 1)
+        u = f"https://{host}/{path}"
+    elif u.startswith("ssh://git@"):
+        u = "https://" + u[len("ssh://git@"):]
+    if u.endswith(".git"):
+        u = u[:-4]
+    return u
+
+
+def npm_url_for(name: str) -> str:
+    """插件名 → npm 包页地址（保留 scoped 包的 @ 与 /）。"""
+    n = (name or "").strip()
+    if not n or n.startswith(("（", "(", "—")):
+        return ""
+    return NPM_PACKAGE_URL + n
+
+
+def git_remote_url(path: str | Path) -> str:
+    """取目录的 git origin 地址并转成 https；没有 git 来源时返回空串。
+
+    注意：空路径必须先挡掉——`Path("").is_dir()` 为 True（等于当前目录），
+    否则会误取到本程序自己仓库的 remote。
+    """
+    if path is None or not str(path).strip():
+        return ""
+    p = Path(path)
+    if not p.is_dir() or not (p / ".git").exists():
+        return ""
+    try:
+        r = subprocess.run(
+            ["git", "-C", str(p), "remote", "get-url", "origin"],
+            capture_output=True, text=True, timeout=15,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if r.returncode == 0:
+            return normalize_git_url(r.stdout)
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
+
+
+def load_sources() -> dict:
+    """读取「记住的来源」；损坏时返回 {}。"""
+    try:
+        data = json.loads(sources_file().read_text(encoding="utf-8", errors="replace"))
+    except Exception:  # noqa: BLE001
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def remember_source(key: str, url: str) -> bool:
+    """记住某个条目的来源地址，便于以后再次打开或据此检测更新。"""
+    if not key or not url:
+        return False
+    try:
+        data = load_sources()
+        data[key] = {"url": url, "saved_at": datetime.datetime.now().isoformat(timespec="seconds")}
+        target = sources_file()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_name(target.name + ".tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2, default=str),
+                       encoding="utf-8")
+        os.replace(tmp, target)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def source_key(kind: str, name: str) -> str:
+    """来源记忆的键：类型 + 名称。"""
+    return f"{kind}:{name}".strip()
+
+
+def source_url_for(item: dict, kind: str = "skill", remembered: dict | None = None) -> str:
+    """推导某条插件/技能的下载来源地址。
+
+    优先级：git 来源（技能）→ npm 包页（插件）→ 记住的来源。
+    取不到时返回空串，由界面提示用户。
+    """
+    kind = str(kind or "skill")
+    name = str(item.get("name") or "")
+    path = item.get("path") or ""
+
+    if kind.startswith("skill"):
+        url = git_remote_url(path)
+        if url:
+            return url
+    else:
+        url = npm_url_for(name)
+        if url:
+            return url
+
+    store = remembered if isinstance(remembered, dict) else load_sources()
+    entry = store.get(source_key(kind, name))
+    if isinstance(entry, dict):
+        return str(entry.get("url") or "")
+    if isinstance(entry, str):
+        return entry
+    return ""
+
+
+# ---------------------------------------------------------------------------
 # 自测
 # ---------------------------------------------------------------------------
 def _selftest() -> int:
