@@ -16,8 +16,10 @@ from tkinter import messagebox, ttk
 from pathlib import Path
 
 import updater_core as core
+import i18n
+from i18n import t
 
-APP_TITLE = "DeepSeek Harness 自动检测与更新器"
+APP_TITLE = t("DeepSeek Harness 自动检测与更新器")
 APP_VERSION = "0.6.8"
 
 
@@ -80,33 +82,33 @@ ACCENT_SKILL = {"light": "#6a1b9a", "dark": "#bb86fc"}
 # 各安装类型在此程序浮窗中的说明
 KIND_INFO = {
     core.INSTALL_KIND_SOURCE: {
-        "badge": "源码检出",
-        "title": "源码检出 · Source Checkout",
-        "what": "DeepSeek Harness 的完整开源源码工程（package.json: @deepseek-ai/dsh-root）。"
-                "一般来自 git clone 或 GitHub 源码 zip 解压，包含 apps/cli 等全部源码。",
-        "role": "程序主体。可从该目录直接启动 DSH（如 tsx 运行 apps/cli/src/bin.ts 的 Web UI），"
-                "内置 dsh-* 插件包大多源自这里的 packages 工程。",
-        "how": "对比 GitHub master 源码；更新方式：下载官方源码 zip → 自动备份原目录 → 整目录替换"
-               "（node_modules/.git 会保留并移回，可勾选随后 pnpm install）。",
+        "badge": t("源码检出"),
+        "title": t("源码检出 · Source Checkout"),
+        "what": t("DeepSeek Harness 的完整开源源码工程（package.json: @deepseek-ai/dsh-root）。"
+                "一般来自 git clone 或 GitHub 源码 zip 解压，包含 apps/cli 等全部源码。"),
+        "role": t("程序主体。可从该目录直接启动 DSH（如 tsx 运行 apps/cli/src/bin.ts 的 Web UI），"
+                "内置 dsh-* 插件包大多源自这里的 packages 工程。"),
+        "how": t("对比 GitHub master 源码；更新方式：下载官方源码 zip → 自动备份原目录 → 整目录替换"
+               "（node_modules/.git 会保留并移回，可勾选随后 pnpm install）。"),
         "ref": "GitHub master",
     },
     core.INSTALL_KIND_NPM: {
-        "badge": "npm 全局",
-        "title": "npm 全局安装 · @deepseek-ai/dsh",
-        "what": "通过 npm 全局安装的 dsh 命令行工具包（node_modules/@deepseek-ai/dsh）。",
-        "role": "提供 dsh 命令（CLI 入口）：初始化/管理 profile、运行 `dsh web` 启动 Web UI、"
-                "加载当前安装的运行时插件。",
-        "how": "对比 npm registry 的 latest 发布版；更新方式：npm install -g @deepseek-ai/dsh@latest。",
+        "badge": t("npm 全局"),
+        "title": t("npm 全局安装 · @deepseek-ai/dsh"),
+        "what": t("通过 npm 全局安装的 dsh 命令行工具包（node_modules/@deepseek-ai/dsh）。"),
+        "role": t("提供 dsh 命令（CLI 入口）：初始化/管理 profile、运行 `dsh web` 启动 Web UI、"
+                "加载当前安装的运行时插件。"),
+        "how": t("对比 npm registry 的 latest 发布版；更新方式：npm install -g @deepseek-ai/dsh@latest。"),
         "ref": "npm latest",
     },
     core.INSTALL_KIND_PROFILE: {
-        "badge": "运行时 profile",
-        "title": "运行时 Profile · 插件装载实例",
-        "what": "DSH_HOME（默认 ~/.dsh/profiles/<name>）下的运行实例，以 pnpm workspace 形态管理"
-                "该 profile 启用的插件清单（package.json 的 dsh.profile.bundles）与本地配置。",
-        "role": "决定某次启动加载哪些插件（Web / ACP / SDK 等 profile 模板），是插件在“运行时”"
-                "层面的宿主目录，随 dsh CLI / 源码安装自动生成。",
-        "how": "本身不单独更新：升级其来源（npm 全局 dsh 或源码检出）后，重启 DSH 即用新版。",
+        "badge": t("运行时 profile"),
+        "title": t("运行时 Profile · 插件装载实例"),
+        "what": t("DSH_HOME（默认 ~/.dsh/profiles/<name>）下的运行实例，以 pnpm workspace 形态管理"
+                "该 profile 启用的插件清单（package.json 的 dsh.profile.bundles）与本地配置。"),
+        "role": t("决定某次启动加载哪些插件（Web / ACP / SDK 等 profile 模板），是插件在“运行时”"
+                "层面的宿主目录，随 dsh CLI / 源码安装自动生成。"),
+        "how": t("本身不单独更新：升级其来源（npm 全局 dsh 或源码检出）后，重启 DSH 即用新版。"),
         "ref": "npm latest",
     },
 }
@@ -217,11 +219,12 @@ class UpdaterApp:
                 pass
 
         self.settings = core.load_settings()
+        i18n.set_language(str(self.settings.get("language") or i18n.AUTO))
         self._setup_style()
         self._build_ui()
         self._log(f"{APP_TITLE} 已启动。\nDSH 数据目录：{core.DSH_HOME}\n"
                   f"设置文件：{core.settings_file()}")
-        self._log("正在自动检测本机安装与官方版本…")
+        self._log(t("正在自动检测本机安装与官方版本…"))
         self.refresh_all()
 
     # ---------------- UI 构建 ----------------
@@ -318,8 +321,8 @@ class UpdaterApp:
         except Exception:  # noqa: BLE001
             pass
         self.btn_theme.configure(
-            text="🌙 深色模式" if not self._dark else "☀️ 浅色模式")
-        self._log(f"已切换到{'深色' if self._dark else '浅色'}主题。")
+            text=t("🌙 深色模式") if not self._dark else t("☀️ 浅色模式"))
+        self._log(f"已切换到{t('深色') if self._dark else t('浅色')}主题。")
 
     def _build_ui(self):
         self.root.configure(bg=CLR["bg"])
@@ -329,7 +332,7 @@ class UpdaterApp:
         # 部件」会被完全挤掉。状态栏排最后会导致版本号直接不显示，所以放在最前。
         self._status_bar = tk.Frame(self.root, background=CLR["status_bg"])
         self._status_bar.pack(fill="x", side="bottom")
-        self.status = tk.Label(self._status_bar, text="就绪", relief="flat", anchor="w",
+        self.status = tk.Label(self._status_bar, text=t("就绪"), relief="flat", anchor="w",
                                background=CLR["status_bg"], foreground=CLR["text_dim"],
                                font=("Microsoft YaHei UI", 9), padx=10, pady=5)
         self.status.pack(side="left", fill="x", expand=True)
@@ -352,26 +355,26 @@ class UpdaterApp:
         # 左侧标题区
         titlebox = ttk.Frame(top, style="Panel.TFrame")
         titlebox.pack(side="left", padx=12, pady=8)
-        ttk.Label(titlebox, text="DeepSeek Harness 更新器",
+        ttk.Label(titlebox, text=t("DeepSeek Harness 更新器"),
                   style="Heading.TLabel").pack(anchor="w")
-        ttk.Label(titlebox, text="自动检测本机安装 · 对比官方版本 · 插件/技能扫描 · 一键更新",
+        ttk.Label(titlebox, text=t("自动检测本机安装 · 对比官方版本 · 插件/技能扫描 · 一键更新"),
                   style="Dim.TLabel").pack(anchor="w", pady=(2, 0))
         # 右侧版本条（白底卡片）
         verbox = ttk.Frame(top, style="Panel.TFrame")
         verbox.pack(side="right", padx=12, pady=8)
-        self.lbl_github = ttk.Label(verbox, text="🌐 官方 GitHub master：检测中…",
+        self.lbl_github = ttk.Label(verbox, text=t("🌐 官方 GitHub master：检测中…"),
                                     foreground=CLR["accent"], background=CLR["panel"])
         self.lbl_github.pack(anchor="e")
-        self.lbl_npm = ttk.Label(verbox, text="📦 npm 发布版：检测中…",
+        self.lbl_npm = ttk.Label(verbox, text=t("📦 npm 发布版：检测中…"),
                                  foreground="#7a4a0b", background=CLR["panel"])
         self.lbl_npm.pack(anchor="e", pady=(2, 0))
 
         # ── 中部：安装列表 ──
-        mid = ttk.LabelFrame(self.root, text="本机检测到的 DeepSeek Harness 安装（悬停“类型/状态/性质”列查看说明）")
+        mid = ttk.LabelFrame(self.root, text=t("本机检测到的 DeepSeek Harness 安装（悬停“类型/状态/性质”列查看说明）"))
         mid.pack(fill="both", expand=False, padx=10, pady=6)
         cols = ("kind", "path", "version", "nature", "ref", "status")
-        heads = {"kind": "类型", "path": "位置", "version": "当前版本",
-                 "nature": "版本性质", "ref": "官方参考版本", "status": "状态"}
+        heads = {"kind": t("类型"), "path": t("位置"), "version": t("当前版本"),
+                 "nature": t("版本性质"), "ref": t("官方参考版本"), "status": t("状态")}
         self.tree = ttk.Treeview(mid, columns=cols, show="headings", height=5)
         for c in cols:
             self.tree.heading(c, text=heads[c])
@@ -399,20 +402,20 @@ class UpdaterApp:
         # ── 操作按钮区 ──
         btns = ttk.Frame(self.root)
         btns.pack(fill="x", padx=10, pady=(6, 2))
-        self.btn_update = ttk.Button(btns, text="⬇ 更新所选安装", style="Accent.TButton",
+        self.btn_update = ttk.Button(btns, text=t("⬇ 更新所选安装"), style="Accent.TButton",
                                      command=self.update_selected)
         self.btn_update.pack(side="left", padx=(0, 8))
-        self.btn_plugins = ttk.Button(btns, text="🧩 插件检测", command=self.open_plugins)
+        self.btn_plugins = ttk.Button(btns, text=t("🧩 插件检测"), command=self.open_plugins)
         self.btn_plugins.pack(side="left", padx=(0, 8))
-        self.btn_skills = ttk.Button(btns, text="📚 技能检测", command=self.open_skills)
+        self.btn_skills = ttk.Button(btns, text=t("📚 技能检测"), command=self.open_skills)
         self.btn_skills.pack(side="left", padx=(0, 8))
-        self.btn_refresh = ttk.Button(btns, text="🔄 重新检测", command=self.refresh_all)
+        self.btn_refresh = ttk.Button(btns, text=t("🔄 重新检测"), command=self.refresh_all)
         self.btn_refresh.pack(side="left")
-        self.btn_settings = ttk.Button(btns, text="⚙ 数据目录", command=self.show_settings)
+        self.btn_settings = ttk.Button(btns, text=t("⚙ 数据目录"), command=self.show_settings)
         self.btn_settings.pack(side="right", padx=(8, 0))
-        self.btn_export = ttk.Button(btns, text="💾 导出 CSV", command=self.export_csv)
+        self.btn_export = ttk.Button(btns, text=t("💾 导出 CSV"), command=self.export_csv)
         self.btn_export.pack(side="right")
-        self.btn_theme = ttk.Button(btns, text="🌙 深色模式", command=self.toggle_theme)
+        self.btn_theme = ttk.Button(btns, text=t("🌙 深色模式"), command=self.toggle_theme)
         self.btn_theme.pack(side="right", padx=(0, 8))
 
         # ── 偏好设置行 ──
@@ -421,34 +424,50 @@ class UpdaterApp:
         prefs.pack(fill="x", padx=10, pady=(6, 0))
         prow = ttk.Frame(prefs, style="Panel.TFrame")
         prow.pack(fill="x", padx=12, pady=8)
-        self.lbl_pref_title = tk.Label(prow, text="⚙ 偏好设置", background=CLR["panel"],
+        self.lbl_pref_title = tk.Label(prow, text=t("⚙ 偏好设置"), background=CLR["panel"],
                                        foreground=CLR["text"],
                                        font=("Microsoft YaHei UI", 9, "bold"))
         self.lbl_pref_title.pack(side="left", padx=(0, 14))
+
+        # 语言选择：显示各语言的自称，用户一眼能找到自己的语言
+        self.lbl_lang = tk.Label(prow, text=t("语言"), background=CLR["panel"],
+                                 foreground=CLR["text"],
+                                 font=("Microsoft YaHei UI", 9))
+        self.lbl_lang.pack(side="left", padx=(0, 6))
+        self._lang_options = [(i18n.AUTO, t("跟随系统"))] + \
+                             [(code, native) for code, native, _ in i18n.LANGUAGES]
+        self.cmb_lang = ttk.Combobox(prow, values=[label for _, label in self._lang_options],
+                                     state="readonly", width=10)
+        cur_setting = str(self.settings.get("language") or i18n.AUTO)
+        self.cmb_lang.current(next((i for i, (code, _) in enumerate(self._lang_options)
+                                    if code == cur_setting), 0))
+        self.cmb_lang.pack(side="left", padx=(0, 14))
+        self.cmb_lang.bind("<<ComboboxSelected>>", self._on_language_change)
+
         self.var_gpu = tk.BooleanVar(value=bool(self.settings.get("gpu_acceleration")))
-        self.chk_gpu = ttk.Checkbutton(prow, text="使用 GPU 加速", variable=self.var_gpu,
+        self.chk_gpu = ttk.Checkbutton(prow, text=t("使用 GPU 加速"), variable=self.var_gpu,
                                        command=self._on_gpu_toggle)
         self.chk_gpu.pack(side="left")
-        ttk.Label(prow, text="DSH 暂无 GPU 加速选项，仅记录偏好，暂不影响行为。",
+        ttk.Label(prow, text=t("DSH 暂无 GPU 加速选项，仅记录偏好，暂不影响行为。"),
                   style="Dim.TLabel").pack(side="left", padx=(14, 0))
-        self.lbl_pref_file = tk.Label(prow, text="📂 打开设置文件", background=CLR["panel"],
+        self.lbl_pref_file = tk.Label(prow, text=t("📂 打开设置文件"), background=CLR["panel"],
                                       foreground=CLR["text_dim"], cursor="hand2",
                                       font=("Microsoft YaHei UI", 8, "underline"))
         self.lbl_pref_file.pack(side="right", padx=(10, 0))
         self.lbl_pref_file.bind("<Button-1>", lambda e: self._open_settings_file())
 
         # ── 当前操作进度横幅（扫描/下载/更新通用） ──
-        progframe = ttk.LabelFrame(self.root, text="当前任务")
+        progframe = ttk.LabelFrame(self.root, text=t("当前任务"))
         progframe.pack(fill="x", padx=10, pady=4)
         inner = ttk.Frame(progframe)
         inner.pack(fill="x", padx=6, pady=6)
         self.prog = ttk.Progressbar(inner, mode="determinate", maximum=1000)
         self.prog.pack(side="left", fill="x", expand=True)
-        self.lbl_progress = ttk.Label(inner, text="等待任务…", width=60, anchor="e")
+        self.lbl_progress = ttk.Label(inner, text=t("等待任务…"), width=60, anchor="e")
         self.lbl_progress.pack(side="right", padx=(10, 0))
 
         # ── 日志区 ──
-        logframe = ttk.LabelFrame(self.root, text="日志 / 进度")
+        logframe = ttk.LabelFrame(self.root, text=t("日志 / 进度"))
         logframe.pack(fill="both", expand=True, padx=10, pady=6)
         self.txt = tk.Text(logframe, height=4, wrap="word", state="disabled",
                            font=("Consolas", 9), background=CLR["log_bg"],
@@ -471,7 +490,7 @@ class UpdaterApp:
     # ---------------- 进度横幅 ----------------
     def _prog_reset(self, text: str = ""):
         self.prog.configure(value=0)
-        self.lbl_progress.configure(text=text or "准备中…")
+        self.lbl_progress.configure(text=text or t("准备中…"))
 
     def _prog_set(self, value: float, text: str | None = None):
         """value 0.0~1.0；text 留空则自动显示百分比。"""
@@ -497,8 +516,8 @@ class UpdaterApp:
         if self.busy:
             return
         self._set_busy(True)
-        self._set_status("正在检测本机安装与官方版本…")
-        self._log("\n── 开始检测 ──")
+        self._set_status(t("正在检测本机安装与官方版本…"))
+        self._log(t("\n── 开始检测 ──"))
         worker = Worker(self._log, self._on_detect_done)
         self._worker = worker
         worker.start(core.detect_all)
@@ -516,13 +535,13 @@ class UpdaterApp:
         self._set_busy(False)
         if err is not None:
             messagebox.showerror(APP_TITLE, f"检测失败：\n{err}")
-            self._set_status("检测失败")
+            self._set_status(t("检测失败"))
             return
         self.official = result["official"]
         gh = result["official"]["github"]
         npm = result["official"]["npm"]
-        gh_txt = gh.get("version") or "获取失败"
-        npm_txt = npm.get("version") or "获取失败"
+        gh_txt = gh.get("version") or t("获取失败")
+        npm_txt = npm.get("version") or t("获取失败")
         if gh.get("version"):
             gh_txt += f"（{gh.get('date', '')[:10]}）"
         gh_assess = gh.get("assess") or {}
@@ -564,7 +583,7 @@ class UpdaterApp:
         self._set_status(f"检测完成：发现 {len(result['installs'])} 处安装"
                          + (f"（自检合并重复 {sc.get('duplicates', 0)} 处）" if sc.get("duplicates") else ""))
         if not result["installs"]:
-            self._log("未自动发现安装，可使用界面按钮或自行检查路径。")
+            self._log(t("未自动发现安装，可使用界面按钮或自行检查路径。"))
 
     @staticmethod
     def _row_tag(inst: dict) -> str:
@@ -575,23 +594,23 @@ class UpdaterApp:
         if grade == "prerelease":
             return "prerelease"
         status = inst.get("status", "")
-        if "可更新" in status:
+        if t("可更新") in status:
             return "update"
         if grade == "candidate":
             return "candidate"
-        if status == "已是最新":
+        if status == t("已是最新"):
             return "ok"
-        if status and "失败" in status:
+        if status and t("失败") in status:
             return "err"
         return "dim"
 
     @staticmethod
     def _status_tag(status: str) -> str:
-        if "可更新" in status:
+        if t("可更新") in status:
             return "update"
-        if status == "已是最新":
+        if status == t("已是最新"):
             return "ok"
-        if status and "失败" in status:
+        if status and t("失败") in status:
             return "err"
         return "dim"
 
@@ -599,7 +618,7 @@ class UpdaterApp:
     def _selected_install(self):
         sel = self.tree.selection()
         if not sel:
-            messagebox.showinfo(APP_TITLE, "请先在列表中选中一行安装。")
+            messagebox.showinfo(APP_TITLE, t("请先在列表中选中一行安装。"))
             return None
         for r in self.install_rows:
             if r["iid"] == sel[0]:
@@ -619,8 +638,8 @@ class UpdaterApp:
         else:
             messagebox.showinfo(
                 APP_TITLE,
-                "「运行时 profile」无需单独更新：它由源码/CLI 安装提供。\n"
-                "请更新其对应的源码检出或 npm 全局安装。",
+                t("「运行时 profile」无需单独更新：它由源码/CLI 安装提供。\n"
+                "请更新其对应的源码检出或 npm 全局安装。"),
             )
 
     def _confirm_npm_update(self, inst):
@@ -633,7 +652,7 @@ class UpdaterApp:
         ):
             return
         self._set_busy(True)
-        self._set_status("正在通过 npm 更新全局安装…")
+        self._set_status(t("正在通过 npm 更新全局安装…"))
         self._prog_reset("npm install -g @deepseek-ai/dsh@latest")
         worker = Worker(self._log, self._on_npm_update_done)
         self._worker = worker
@@ -646,18 +665,18 @@ class UpdaterApp:
         self._set_busy(False)
         if err is not None:
             messagebox.showerror(APP_TITLE, f"npm 更新失败：\n{err}")
-            self._set_status("npm 更新失败")
-            self._prog_reset("npm 更新失败")
+            self._set_status(t("npm 更新失败"))
+            self._prog_reset(t("npm 更新失败"))
             return
-        messagebox.showinfo(APP_TITLE, result.get("message", "npm 更新完成"))
-        self._set_status("npm 更新完成")
-        self._prog_done("npm 更新完成")
+        messagebox.showinfo(APP_TITLE, result.get("message", t("npm 更新完成")))
+        self._set_status(t("npm 更新完成"))
+        self._prog_done(t("npm 更新完成"))
         self.refresh_all()
 
     def _confirm_source_update(self, inst):
         # 询问是否运行 pnpm install
         ask = tk.Toplevel(self.root)
-        ask.title("更新源码检出")
+        ask.title(t("更新源码检出"))
         self._apply_icon(ask)
         ask.transient(self.root)
         ask.grab_set()
@@ -666,7 +685,7 @@ class UpdaterApp:
         frm.pack()
         ttk.Label(
             frm,
-            text="将更新源码检出：",
+            text=t("将更新源码检出："),
             font=("Microsoft YaHei UI", 11, "bold"),
         ).grid(row=0, column=0, sticky="w", pady=(0, 6))
         ttk.Label(frm, text=inst["path"], wraplength=560).grid(row=1, column=0, sticky="w")
@@ -695,28 +714,28 @@ class UpdaterApp:
                 ).grid(row=3, column=0, sticky="w", pady=(0, 6))
         ttk.Label(
             frm,
-            text="流程：下载官方源码 zip → 备份原目录（同盘改名）→ 整目录替换\n"
+            text=t("流程：下载官方源码 zip → 备份原目录（同盘改名）→ 整目录替换\n"
                  "（node_modules / .git 会自动移回新目录，以加快依赖安装）\n"
-                 "更新期间请勿关闭本程序；若 DSH Web (3080) 正在运行将中止更新。",
+                 "更新期间请勿关闭本程序；若 DSH Web (3080) 正在运行将中止更新。"),
             foreground="#a00", wraplength=560,
         ).grid(row=4, column=0, sticky="w", pady=6)
         self.var_pnpm = tk.BooleanVar(value=False)
         ttk.Checkbutton(
-            frm, text="替换后自动运行 pnpm install（推荐，用于同步依赖）",
+            frm, text=t("替换后自动运行 pnpm install（推荐，用于同步依赖）"),
             variable=self.var_pnpm,
         ).grid(row=5, column=0, sticky="w", pady=4)
         btns = ttk.Frame(frm)
         btns.grid(row=6, column=0, sticky="e", pady=(10, 0))
-        ttk.Button(btns, text="开始更新", command=lambda: self._run_source_update(inst, ask)).pack(side="left", padx=4)
-        ttk.Button(btns, text="取消", command=ask.destroy).pack(side="left")
+        ttk.Button(btns, text=t("开始更新"), command=lambda: self._run_source_update(inst, ask)).pack(side="left", padx=4)
+        ttk.Button(btns, text=t("取消"), command=ask.destroy).pack(side="left")
 
     def _run_source_update(self, inst, ask):
         ask.destroy()
         if self.busy:
             return
         self._set_busy(True)
-        self._set_status("正在下载并替换源码…")
-        self._prog_reset("准备下载官方源码…")
+        self._set_status(t("正在下载并替换源码…"))
+        self._prog_reset(t("准备下载官方源码…"))
         worker = Worker(self._log, self._on_source_update_done, on_progress=self._on_update_progress)
         self._worker = worker
         run_pnpm = self.var_pnpm.get()
@@ -741,15 +760,15 @@ class UpdaterApp:
         self._set_busy(False)
         if err is not None:
             messagebox.showerror(APP_TITLE, f"更新失败：\n{err}")
-            self._set_status("更新失败")
-            self._prog_reset("更新失败")
+            self._set_status(t("更新失败"))
+            self._prog_reset(t("更新失败"))
             return
-        msg = result.get("message", "更新完成")
+        msg = result.get("message", t("更新完成"))
         if result.get("backup"):
             msg += f"\n\n原目录备份于：\n{result['backup']}"
         messagebox.showinfo(APP_TITLE, msg)
-        self._set_status("更新完成")
-        self._prog_done("更新完成")
+        self._set_status(t("更新完成"))
+        self._prog_done(t("更新完成"))
         self.refresh_all()
 
     # ---------------- 插件 / 技能窗口 ----------------
@@ -757,37 +776,37 @@ class UpdaterApp:
         """插件窗口 —— 暗绿主题：检测最新版走 npm，同步更新支持 git/npm 源插件。"""
         accent = ACCENT_PLUGIN["dark" if self._dark else "light"]
         self._open_inventory_window(
-            name="插件",
-            title="🧩 DeepSeek Harness 插件检测",
+            name=t("插件"),
+            title=t("🧩 DeepSeek Harness 插件检测"),
             reopen=self.open_plugins,
             accent=accent,
-            accent_label="暗绿主题",
-            columns=(("name", "名称"), ("version", "版本"), ("size", "大小"),
-                     ("installed", "安装时间"), ("latest", "最新版"), ("enabled", "启用"),
-                     ("source", "来源")),
+            accent_label=t("暗绿主题"),
+            columns=(("name", t("名称")), ("version", t("版本")), ("size", t("大小")),
+                     ("installed", t("安装时间")), ("latest", t("最新版")), ("enabled", t("启用")),
+                     ("source", t("来源"))),
             widths=(300, 88, 84, 120, 84, 58, 120),
             scan_fn=core.scan_plugins,
             scan_kwargs={},
             row_of=lambda it: (it["name"], it["version"] or "—", it["size_text"],
                                it.get("installed") or "—", "—",
-                               "✔ 启用" if it["enabled"] else "内置", it["source"]),
+                               t("✔ 启用") if it["enabled"] else t("内置"), it["source"]),
             detail_of=lambda it: it["path"],
             latest_fn=core.check_plugin_latest,
             update_fn=None,  # 插件更新=更新对应 dsh/运行时，见 update_selected
-            update_label="⬇ 同步更新",
+            update_label=t("⬇ 同步更新"),
         )
 
     def open_skills(self):
         """技能窗口 —— 暗紫主题：检测最新版走 git 来源，可同步 git pull。"""
         accent = ACCENT_SKILL["dark" if self._dark else "light"]
         self._open_inventory_window(
-            name="技能",
-            title="📚 DeepSeek Harness 技能检测",
+            name=t("技能"),
+            title=t("📚 DeepSeek Harness 技能检测"),
             reopen=self.open_skills,
             accent=accent,
-            accent_label="暗紫主题",
-            columns=(("name", "名称"), ("version", "版本"), ("size", "大小"),
-                     ("installed", "安装时间"), ("latest", "最新版")),
+            accent_label=t("暗紫主题"),
+            columns=(("name", t("名称")), ("version", t("版本")), ("size", t("大小")),
+                     ("installed", t("安装时间")), ("latest", t("最新版"))),
             widths=(300, 100, 96, 122, 100),
             scan_fn=core.scan_skills,
             scan_kwargs={},
@@ -796,7 +815,7 @@ class UpdaterApp:
             detail_of=lambda it: it["path"],
             latest_fn=core.check_skill_latest,
             update_fn=core.update_skills_git,
-            update_label="⬇ git 同步更新",
+            update_label=t("⬇ git 同步更新"),
         )
 
     def _open_inventory_window(self, name, title, reopen, accent, accent_label,
@@ -823,21 +842,21 @@ class UpdaterApp:
         head.pack(fill="x", padx=10, pady=(10, 0))
         toprow = ttk.Frame(head)
         toprow.pack(fill="x")
-        lbl = ttk.Label(toprow, text="正在扫描…", foreground=accent,
+        lbl = ttk.Label(toprow, text=t("正在扫描…"), foreground=accent,
                         font=("Microsoft YaHei UI", 10, "bold"))
         lbl.pack(side="left")
         # 操作按钮组（右）
         right = ttk.Frame(toprow)
         right.pack(side="right")
         if latest_fn is not None:
-            btn_latest = ttk.Button(right, text="🔍 检测最新版",
+            btn_latest = ttk.Button(right, text=t("🔍 检测最新版"),
                                     style=accent_style,
                                     command=lambda: _check_latest())
             btn_latest.pack(side="left", padx=(0, 6))
         if update_label is not None:
             btn_update = ttk.Button(right, text=update_label, command=lambda: _sync_update())
             btn_update.pack(side="left", padx=(0, 6))
-        btn_rescan = ttk.Button(right, text="↻ 重新扫描",
+        btn_rescan = ttk.Button(right, text=t("↻ 重新扫描"),
                                 command=lambda: self._rescan(win, reopen))
         btn_rescan.pack(side="left")
         bar = ttk.Progressbar(head, mode="determinate", maximum=1000)
@@ -908,9 +927,9 @@ class UpdaterApp:
                 if speed == speed:  # 非 NaN
                     remain = (total - done) / speed if speed > 0 else 0.0
                     speed_txt = f"{speed:.0f} 项/秒"
-                    eta_txt = core._fmt_eta(remain) if remain > 0 else "即将完成"
+                    eta_txt = core._fmt_eta(remain) if remain > 0 else t("即将完成")
                 else:
-                    speed_txt, eta_txt = "计算中…", "计算中…"
+                    speed_txt, eta_txt = t("计算中…"), t("计算中…")
                 try:
                     lbl_prog.configure(
                         text=f"已检测 {done}/{total} 项（{pct * 100:.1f}%）｜当前：{current or '—'}"
@@ -939,12 +958,12 @@ class UpdaterApp:
                 # 扫描线程异常：让窗口脱离“正在扫描”并显示原因
                 try:
                     bar.configure(value=1000)
-                    lbl.configure(text="扫描出错")
-                    lbl_prog.configure(text="✖ 扫描异常")
+                    lbl.configure(text=t("扫描出错"))
+                    lbl_prog.configure(text=t("✖ 扫描异常"))
                     show_banner(f"扫描失败：{err}\n请点击「↻ 重新扫描」重试，"
                                 f"或检查 DSH 数据目录（DSH_HOME={core.DSH_HOME}）。",
                                 kind="err")
-                    status.configure(text="扫描异常 — 未获得结果")
+                    status.configure(text=t("扫描异常 — 未获得结果"))
                 except tk.TclError:
                     return
                 try:
@@ -962,7 +981,7 @@ class UpdaterApp:
                         text=f"✔ 完成（用时 {elapsed:.2f} 秒，平均 {speed:.1f} 项/秒）"
                     )
                 else:
-                    lbl_prog.configure(text="✔ 完成")
+                    lbl_prog.configure(text=t("✔ 完成"))
             except tk.TclError:
                 return  # 窗口已被关闭
             items = result.get("items", [])
@@ -972,7 +991,7 @@ class UpdaterApp:
                     tree._item_map[iid] = it  # type: ignore[attr-defined]
             except Exception as e:  # noqa: BLE001 —— 兜底：不让填表异常卡死窗口
                 try:
-                    lbl.configure(text="填表时遇到异常，已显示部分结果")
+                    lbl.configure(text=t("填表时遇到异常，已显示部分结果"))
                     banner.configure(text=f"⚠ 列表渲染异常：{e}",
                                      fg=CLR["err"], bg="#fdeeec")
                 except tk.TclError:
@@ -982,23 +1001,23 @@ class UpdaterApp:
             if root:
                 lbl.configure(text=f"扫描目录：{root}")
             else:
-                lbl.configure(text="扫描完成")
+                lbl.configure(text=t("扫描完成"))
             total_size = sum(it.get("size", 0) for it in items)
             eff = f"共 {len(items)} 项    合计 {core.human_size(total_size)}"
             if elapsed:
                 eff += f"    用时 {elapsed:.2f} 秒"
             if speed:
                 eff += f"    平均 {speed:.1f} 项/秒"
-            eff += "    双击行可打开所在路径"
+            eff += t("    双击行可打开所在路径")
             status.configure(text=eff)
 
             # 空态 / 错误诊断横幅
             if errs:
-                show_banner("⚠ " + "；".join(str(e) for e in errs[:3])
+                show_banner("⚠ " + t("；").join(str(e) for e in errs[:3])
                             + ("…" if len(errs) > 3 else ""), kind="err")
             elif not items:
                 show_banner(f"未检测到任何{name}。\n"
-                            f"扫描目录：{root or '（未指定）'}\n"
+                            f"扫描目录：{root or t('（未指定）')}\n"
                             f"请确认 DSH 数据目录（DSH_HOME={core.DSH_HOME}）正确，"
                             f"或点击「↻ 重新扫描」重试。", kind="warn")
             else:
@@ -1086,8 +1105,8 @@ class UpdaterApp:
             upd = _apply_latest_result(res or {})
             total = len(state["items"])
             show_banner(f"✅ 最新版检测完成：共 {total} 项，其中 {upd} 项有可用更新"
-                        + ("（技能若无 git 来源则无法检测）" if name == "技能" else "")
-                        + "。可在主窗口对源码检出/npm 全局执行更新。",
+                        + (t("（技能若无 git 来源则无法检测）") if name == t("技能") else "")
+                        + t("。可在主窗口对源码检出/npm 全局执行更新。"),
                         kind="ok")
             status.configure(text=f"检测完成（最新版）：{total} 项 / 可更新 {upd} 项")
 
@@ -1096,9 +1115,9 @@ class UpdaterApp:
             if update_fn is None:
                 # 插件窗口：引导到主窗口的“更新所选安装”（npm 全局 @deepseek-ai/dsh）
                 if not messagebox.askyesno(
-                        title, "插件本身随 DeepSeek Harness 发布版更新。\n"
+                        title, t("插件本身随 DeepSeek Harness 发布版更新。\n"
                                "是否打开主窗口执行「npm 全局 / 源码检出」更新？\n"
-                               "（第三方插件请在对应 profile 中用 dsh plugin 更新）"):
+                               "（第三方插件请在对应 profile 中用 dsh plugin 更新）")):
                     return
                 try:
                     win.destroy()
@@ -1109,8 +1128,8 @@ class UpdaterApp:
             items_git = [it for it in state["items"]
                          if (Path(it.get("path", "")) / ".git").is_dir()]
             if not items_git:
-                show_banner("没有可 git 同步的技能：本机技能均为拷贝安装（无 .git 来源），"
-                            "请在官网手动下载覆盖。", kind="warn")
+                show_banner(t("没有可 git 同步的技能：本机技能均为拷贝安装（无 .git 来源），"
+                            "请在官网手动下载覆盖。"), kind="warn")
                 return
             show_banner(f"正在 git 同步 {len(items_git)} 个技能…", kind="ok")
             w = Worker(self._log,
@@ -1206,14 +1225,14 @@ class UpdaterApp:
         wrote = []
         with open(base / "dsh_plugins.csv", "w", newline="", encoding="utf-8-sig") as f:
             w = csv.writer(f)
-            w.writerow(["名称", "版本", "大小(字节)", "大小", "启用", "来源", "路径"])
+            w.writerow([t("名称"), t("版本"), t("大小(字节)"), t("大小"), t("启用"), t("来源"), t("路径")])
             for it in plugins["items"]:
                 w.writerow([it["name"], it["version"], it["size"], it["size_text"],
-                            "是" if it["enabled"] else "", it["source"], it["path"]])
+                            t("是") if it["enabled"] else "", it["source"], it["path"]])
         wrote.append("dsh_plugins.csv")
         with open(base / "dsh_skills.csv", "w", newline="", encoding="utf-8-sig") as f:
             w = csv.writer(f)
-            w.writerow(["名称", "版本", "大小(字节)", "大小", "路径"])
+            w.writerow([t("名称"), t("版本"), t("大小(字节)"), t("大小"), t("路径")])
             for it in skills["items"]:
                 w.writerow([it["name"], it["version"], it["size"], it["size_text"], it["path"]])
         wrote.append("dsh_skills.csv")
@@ -1232,6 +1251,38 @@ class UpdaterApp:
         )
 
     # ---------------- 偏好设置 ----------------
+    def _on_language_change(self, _evt=None):
+        """语言下拉框变化：立即保存并重建界面。"""
+        idx = self.cmb_lang.current()
+        if idx < 0 or idx >= len(self._lang_options):
+            return
+        code = self._lang_options[idx][0]
+        self.settings["language"] = code
+        saved = core.save_settings(self.settings)
+        i18n.set_language(code)
+        if not saved:
+            self._log(t("⚠ 语言偏好保存失败，本次运行仍会生效"))
+        # 延迟重建：此刻回调正处于即将被销毁的控件的处理链上，直接 destroy 不安全
+        self.root.after(30, self._rebuild_ui)
+
+    def _rebuild_ui(self):
+        """按当前语言重建整个界面（销毁所有子部件后重新构建）。
+
+        界面文案是在构建时取值的，所以换语言必须重建；重建后会重新检测一次，
+        因此不会留下空白列表。
+        """
+        try:
+            for child in self.root.winfo_children():
+                child.destroy()
+        except tk.TclError:
+            return
+        self._tip_win = None
+        self._upd_win = None
+        self._build_ui()
+        self._log(f"界面语言：{i18n.language_display_name(i18n.get_language())}"
+                  f"（{i18n.get_language()}）")
+        self.refresh_all()
+
     def _open_settings_file(self):
         """打开设置文件；文件还不存在时退而打开它所在的目录。"""
         target = core.settings_file()
@@ -1251,14 +1302,14 @@ class UpdaterApp:
         value = bool(self.var_gpu.get())
         self.settings["gpu_acceleration"] = value
         ok = core.save_settings(self.settings)
-        state = "开启" if value else "关闭"
+        state = t("开启") if value else t("关闭")
         if ok:
             self._log(f"偏好已保存：GPU 加速 = {state}（仅本地记录，DSH 暂无对应选项）")
             self._set_status(f"偏好已保存：GPU 加速 {state}")
         else:
             self._log(f"⚠ 偏好保存失败（{core.settings_file()} 不可写）："
                       f"GPU 加速 = {state}，本次选择仅当前会话有效")
-            self._set_status("偏好保存失败，详见日志")
+            self._set_status(t("偏好保存失败，详见日志"))
 
     # ---------------- 检查更新器自身更新（右下角版本号） ----------------
     def _on_version_click(self, _evt=None):
@@ -1296,13 +1347,13 @@ class UpdaterApp:
 
         frm = ttk.Frame(win, padding=16)
         frm.pack(fill="both", expand=True)
-        tk.Label(frm, text="检查更新器自身更新", anchor="w", background=CLR["bg"],
+        tk.Label(frm, text=t("检查更新器自身更新"), anchor="w", background=CLR["bg"],
                  foreground=CLR["text"], font=("Microsoft YaHei UI", 11, "bold")).pack(anchor="w")
         tk.Label(frm, text=f"当前版本：v{APP_VERSION}", anchor="w", background=CLR["bg"],
                  foreground=CLR["text_dim"], font=("Microsoft YaHei UI", 9)).pack(
                      anchor="w", pady=(2, 10))
 
-        self._upd_status = tk.Label(frm, text="正在检查 GitHub 上的最新发布…", anchor="w",
+        self._upd_status = tk.Label(frm, text=t("正在检查 GitHub 上的最新发布…"), anchor="w",
                                     justify="left", width=52, background=CLR["bg"],
                                     foreground=CLR["text"])
         self._upd_status.pack(anchor="w")
@@ -1312,10 +1363,10 @@ class UpdaterApp:
 
         btns = ttk.Frame(frm)
         btns.pack(fill="x", pady=(16, 0))
-        self._upd_open_btn = ttk.Button(btns, text="打开 GitHub 页面", state="disabled",
+        self._upd_open_btn = ttk.Button(btns, text=t("打开 GitHub 页面"), state="disabled",
                                         command=lambda: self._open_url(self._upd_url))
         self._upd_open_btn.pack(side="left")
-        ttk.Button(btns, text="关闭", command=self._close_upd_win).pack(side="right")
+        ttk.Button(btns, text=t("关闭"), command=self._close_upd_win).pack(side="right")
 
         # 居中显示在主窗口上方
         win.update_idletasks()
@@ -1346,13 +1397,13 @@ class UpdaterApp:
             return
         try:
             if err is not None:
-                self._upd_status.configure(text="检查失败", foreground=CLR["err"])
+                self._upd_status.configure(text=t("检查失败"), foreground=CLR["err"])
                 self._upd_detail.configure(text=f"{type(err).__name__}: {err}")
                 return
             result = result or {}
             if not result.get("ok"):
-                self._upd_status.configure(text="检查失败", foreground=CLR["err"])
-                self._upd_detail.configure(text=result.get("error") or "未知原因")
+                self._upd_status.configure(text=t("检查失败"), foreground=CLR["err"])
+                self._upd_detail.configure(text=result.get("error") or t("未知原因"))
                 return
 
             tag = result.get("tag") or ""
@@ -1365,7 +1416,7 @@ class UpdaterApp:
                 lines = [f"当前 v{APP_VERSION}  →  最新 {tag}"]
                 if date:
                     lines.append(f"发布时间：{date}")
-                lines.append("点击左下按钮打开 GitHub 页面。")
+                lines.append(t("点击左下按钮打开 GitHub 页面。"))
                 self._upd_detail.configure(text="\n".join(lines))
             else:
                 self._upd_status.configure(text=f"✅ 已是最新版本（v{APP_VERSION}）",
@@ -1426,7 +1477,7 @@ class UpdaterApp:
         color_note = {"stable": "✅", "candidate": "🟠", "prerelease": "🟣", "unstable": "🛑"}.get(grade, "")
         head = f"◉ 版本性质：{label} {color_note}" if with_title else f"{label} {color_note}"
         if grade == "unstable":
-            head += "\n   ⚠ 未能在官网核实该版本 —— 视为【不稳定版】，请谨慎使用"
+            head += t("\n   ⚠ 未能在官网核实该版本 —— 视为【不稳定版】，请谨慎使用")
         if reason:
             head += f"\n   依据：{reason}"
         return head
@@ -1435,16 +1486,16 @@ class UpdaterApp:
         kind = inst["kind"]
         info = KIND_INFO.get(kind)
         if not info:
-            return "未知类型。"
+            return t("未知类型。")
         gh = (self.official or {}).get("github", {})
         npm = (self.official or {}).get("npm", {})
         local = inst.get("version") or "—"
         if kind == core.INSTALL_KIND_SOURCE:
-            ref = gh.get("version") or "获取失败"
-            need = inst.get("status") == "可更新"
+            ref = gh.get("version") or t("获取失败")
+            need = inst.get("status") == t("可更新")
         else:
-            ref = npm.get("version") or "获取失败"
-            need = inst.get("status") in ("可更新", "可更新(npm)")
+            ref = npm.get("version") or t("获取失败")
+            need = inst.get("status") in (t("可更新"), t("可更新(npm)"))
         recent = gh.get("recent") or []
         lines = [
             f"【{info['title']}】",
@@ -1454,7 +1505,7 @@ class UpdaterApp:
             f"◉ 在 DSH 中作用：{info['role']}",
             "",
             f"◉ 版本：本地 {local}   ∥   官方({info['ref']}) {ref}",
-            f"◉ 是否需要立即更新：{'是，有可用更新' if need else '否，已是最新'}",
+            f"◉ 是否需要立即更新：{t('是，有可用更新') if need else t('否，已是最新')}",
             "",
             self._stability_line(inst),
             "",
@@ -1462,11 +1513,11 @@ class UpdaterApp:
         ]
         if need and recent:
             lines.append("")
-            lines.append("◉ 官方近期更新内容（最近若干提交，可作更新预期参考）：")
+            lines.append(t("◉ 官方近期更新内容（最近若干提交，可作更新预期参考）："))
             for c in recent[:4]:
                 lines.append(f"   · {c.get('date', '')}  {c.get('msg', '')}")
         lines.append("")
-        lines.append("（提示：更新前请先退出正在运行的 DeepSeek Harness）")
+        lines.append(t("（提示：更新前请先退出正在运行的 DeepSeek Harness）"))
         return "\n".join(lines)
 
     def _nature_tip_text(self, inst: dict) -> str:
@@ -1477,19 +1528,19 @@ class UpdaterApp:
         status = inst.get("status", "—")
         ver = inst.get("version") or "—"
         base = ""
-        if status == "可更新":
+        if status == t("可更新"):
             base = (f"当前版本 {ver} 落后于官方，可点击\n"
                     f"「⬇ 更新所选安装」一键升级（自动备份后替换）。")
-        elif status == "已是最新":
+        elif status == t("已是最新"):
             base = f"当前版本 {ver} 与官方一致，无需更新。"
         else:
             base = f"状态：{status}\n（版本信息：{ver}）"
         # 若该版本不稳定，追加醒目提示
         grade = inst.get("grade", "")
         if grade == "unstable":
-            base += "\n\n🛑 注意：该版本【不稳定版】，官网无法核实，升级请谨慎。"
+            base += t("\n\n🛑 注意：该版本【不稳定版】，官网无法核实，升级请谨慎。")
         elif grade == "prerelease":
-            base += "\n\n🟣 提示：该版本为官方预发布（alpha/beta），可能存在兼容性变化。"
+            base += t("\n\n🟣 提示：该版本为官方预发布（alpha/beta），可能存在兼容性变化。")
         return base
 
     def _show_tip(self, event, text: str, width: int = 460):

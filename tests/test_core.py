@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+import i18n
 import updater_core as core
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -475,3 +476,85 @@ def test_settings_save_failure_returns_false(monkeypatch, tmp_path):
     blocker.write_text("x", encoding="utf-8")       # 用文件占住路径
     monkeypatch.setenv("DSH_UPDATER_SETTINGS_DIR", str(blocker / "sub"))
     assert core.save_settings({"gpu_acceleration": True}) is False
+
+
+# ---------------------------------------------------------------------------
+# 多语言（i18n）
+# ---------------------------------------------------------------------------
+def test_langid_to_code_simplified_vs_traditional():
+    """简体/繁体必须分清——这里写错过一次，把简体误判成繁体。"""
+    assert i18n._langid_to_code(0x0804) == "zh-CN"      # 大陆简体
+    assert i18n._langid_to_code(0x1004) == "zh-CN"      # 新加坡简体
+    assert i18n._langid_to_code(0x0404) == "zh-TW"      # 台湾繁体
+    assert i18n._langid_to_code(0x0C04) == "zh-TW"      # 香港
+    assert i18n._langid_to_code(0x1404) == "zh-TW"      # 澳门
+    assert i18n._langid_to_code(0x0409) == "en"
+    assert i18n._langid_to_code(0x0411) == "ja"
+    assert i18n._langid_to_code(0x0412) == "ko"
+    assert i18n._langid_to_code(0x0407) is None         # 德语未支持 → 回退
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("zh-CN", "zh-CN"), ("zh_CN", "zh-CN"), ("zh-Hans", "zh-CN"), ("zh", "zh-CN"),
+    ("zh-TW", "zh-TW"), ("zh_HK", "zh-TW"), ("zh-Hant", "zh-TW"),
+    ("en-US", "en"), ("en", "en"),
+    ("ja-JP", "ja"), ("ko-KR", "ko"),
+    ("de-DE", None), ("", None), ("auto", None),
+])
+def test_normalize_language(raw, expected):
+    assert i18n.normalize_language(raw) == expected
+
+
+def test_t_falls_back_to_source_text():
+    """缺翻译时回退原文，绝不返回空串——否则界面会出现空白。"""
+    old = i18n.get_language()
+    try:
+        i18n.set_language("en")
+        assert i18n.t("这条肯定没翻译过") == "这条肯定没翻译过"
+    finally:
+        i18n.set_language(old)
+
+
+def test_t_returns_source_unchanged_in_chinese():
+    old = i18n.get_language()
+    try:
+        i18n.set_language("zh-CN")
+        assert i18n.t("就绪") == "就绪"
+        assert i18n.t("任意未翻译内容") == "任意未翻译内容"
+    finally:
+        i18n.set_language(old)
+
+
+def test_t_supports_placeholders_in_all_languages():
+    old = i18n.get_language()
+    try:
+        for code in i18n.LANGUAGE_CODES:
+            i18n.set_language(code)
+            out = i18n.t("当前版本 v{ver} · 检查更新", ver="9.9.9")
+            assert "9.9.9" in out, f"{code} 占位符未替换"
+    finally:
+        i18n.set_language(old)
+
+
+def test_t_bad_placeholder_falls_back_instead_of_raising():
+    """译文写错占位符时不能把界面搞崩。"""
+    old = i18n.get_language()
+    try:
+        i18n.set_language("en")
+        assert i18n.t("当前版本 v{ver} · 检查更新", wrong="x") == "当前版本 v{ver} · 检查更新"
+    finally:
+        i18n.set_language(old)
+
+
+def test_every_supported_language_has_some_translations():
+    for code in i18n.LANGUAGE_CODES:
+        if code == i18n.SOURCE_LANG:
+            continue
+        assert i18n.coverage(code) > 0, f"{code} 没有任何翻译"
+
+
+def test_language_setting_roundtrip(monkeypatch, tmp_path):
+    monkeypatch.setenv("DSH_UPDATER_SETTINGS_DIR", str(tmp_path))
+    assert core.load_settings()["language"] == "auto"        # 默认跟随系统
+    core.save_settings({**core.load_settings(), "language": "ja"})
+    assert core.load_settings()["language"] == "ja"

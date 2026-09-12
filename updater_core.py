@@ -26,6 +26,8 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
+from i18n import t
+
 # ---------------------------------------------------------------------------
 # 常量
 # ---------------------------------------------------------------------------
@@ -133,10 +135,10 @@ def compare_versions(a: str, b: str) -> int:
 #   prerelease 预发布（alpha/beta 后缀）
 #   unstable   官网信息缺乏或无法核实的“不稳定版”（找不到对应官方记录）
 GRADE_LABELS = {
-    "stable": "稳定版",
-    "candidate": "候选版 rc",
-    "prerelease": "预发布 alpha",
-    "unstable": "不稳定版",
+    "stable": t("稳定版"),
+    "candidate": t("候选版 rc"),
+    "prerelease": t("预发布 alpha"),
+    "unstable": t("不稳定版"),
 }
 
 def _grade_by_suffix(version: str) -> str:
@@ -168,8 +170,8 @@ def assess_version(version: str, official: dict | None, kind_for_ref: str = "npm
     v = (version or "").strip()
     if not v:
         return {"version": v, "grade": "unstable", "grade_label": GRADE_LABELS["unstable"],
-                "reason": "版本号为空，官网无法核实", "in_official": False,
-                "is_official_latest": False, "node_ok": None, "node_reason": "无法评估"}
+                "reason": t("版本号为空，官网无法核实"), "in_official": False,
+                "is_official_latest": False, "node_ok": None, "node_reason": t("无法评估")}
 
     official = official or {}
     ref = official.get(kind_for_ref) or {}
@@ -190,7 +192,7 @@ def assess_version(version: str, official: dict | None, kind_for_ref: str = "npm
 
     reason_parts = []
     node_ok = None
-    node_reason = "该版本未声明 Node.js 运行要求（官方 engines 缺失）"
+    node_reason = t("该版本未声明 Node.js 运行要求（官方 engines 缺失）")
     engines = ref.get("engines_node") or npm.get("engines_node")
     if not engines:
         # 本机 node 版本用于适配性判断
@@ -215,12 +217,12 @@ def assess_version(version: str, official: dict | None, kind_for_ref: str = "npm
         # 官网可用？若官网完全没信息 → 不稳定版；若有信息但找不到该版本记录 → 也不稳定
         if not npm_ok and not gh_ok:
             grade = "unstable"
-            reason_parts.insert(0, "官网信息获取失败（GitHub 与 npm 均不可用），无法核实")
+            reason_parts.insert(0, t("官网信息获取失败（GitHub 与 npm 均不可用），无法核实"))
         else:
             grade = "unstable"
-            reason_parts.insert(0, "该版本未出现在官方发布记录（GitHub tags / npm 版本表）中，无法核实其稳定性")
+            reason_parts.insert(0, t("该版本未出现在官方发布记录（GitHub tags / npm 版本表）中，无法核实其稳定性"))
     if grade == "stable":
-        reason_parts.insert(0, "与官方最新发布版（npm latest）一致")
+        reason_parts.insert(0, t("与官方最新发布版（npm latest）一致"))
     elif grade == "unstable":
         pass
     else:
@@ -229,8 +231,8 @@ def assess_version(version: str, official: dict | None, kind_for_ref: str = "npm
     return {
         "version": v,
         "grade": grade,
-        "grade_label": GRADE_LABELS.get(grade, "不稳定版"),
-        "reason": "；".join(dict.fromkeys(reason_parts)),
+        "grade_label": GRADE_LABELS.get(grade, t("不稳定版")),
+        "reason": t("；").join(dict.fromkeys(reason_parts)),
         "in_official": in_official,
         "is_official_latest": is_latest,
         "node_ok": node_ok,
@@ -498,7 +500,7 @@ def fetch_self_latest(current_version: str = "") -> dict:
             }
 
     if cand is None:
-        res["error"] = res["error"] or "远端没有可用的 Release 或 Tag。"
+        res["error"] = res["error"] or t("远端没有可用的 Release 或 Tag。")
         return res
 
     res.update({"ok": True, "tag": cand["tag"], "date": cand["date"],
@@ -752,7 +754,7 @@ def detect_all() -> dict:
             {
                 "path": str(path),
                 "kind": kind,
-                "kind_label": "源码检出",
+                "kind_label": t("源码检出"),
                 "version": ver,
                 "updateable": True,  # 源码检出支持整目录替换
             }
@@ -763,7 +765,7 @@ def detect_all() -> dict:
             {
                 "path": str(path),
                 "kind": kind,
-                "kind_label": "npm 全局",
+                "kind_label": t("npm 全局"),
                 "version": ver,
                 "updateable": False,  # npm 全局走 npm i -g，另行处理
             }
@@ -787,8 +789,8 @@ def detect_all() -> dict:
     result["selfcheck"]["duplicates"] = len(dedup["removed"])
     if dedup["removed"]:
         result["selfcheck"]["notes"].append(
-            "已合并 %d 处指向同一真实路径的重复安装：%s"
-            % (len(dedup["removed"]), "、".join(r["path"] for r in dedup["removed"][:3]))
+            t("已合并 %d 处指向同一真实路径的重复安装：%s")
+            % (len(dedup["removed"]), t("、").join(r["path"] for r in dedup["removed"][:3]))
         )
 
     # 官方版本
@@ -799,7 +801,7 @@ def detect_all() -> dict:
     for inst in result["installs"]:
         local = inst["version"] or ""
         if not local:
-            inst["status"] = "无法读取版本"
+            inst["status"] = t("无法读取版本")
         elif inst["kind"] == INSTALL_KIND_SOURCE:
             ref, ref_ok = official_gh, bool(official_gh)
             ref_kind = "github"
@@ -810,11 +812,11 @@ def detect_all() -> dict:
         inst["ref_kind"] = ref_kind
         if local:
             if ref_ok and compare_versions(ref, local) > 0:
-                inst["status"] = "可更新"
+                inst["status"] = t("可更新")
             elif not ref_ok and not (official_gh and official_npm):
-                inst["status"] = "官方版本获取失败"
+                inst["status"] = t("官方版本获取失败")
             else:
-                inst["status"] = "已是最新"
+                inst["status"] = t("已是最新")
             # —— 稳定性 / 适配性评估（依据官网信息）——
             inst["assess"] = assess_version(local, result["official"], kind_for_ref=ref_kind)
             inst["grade"] = inst["assess"]["grade"]
@@ -823,7 +825,7 @@ def detect_all() -> dict:
             inst["grade"] = "unstable"
             inst["grade_label"] = GRADE_LABELS["unstable"]
             inst["assess"] = {"grade": "unstable", "grade_label": GRADE_LABELS["unstable"],
-                              "reason": "版本号为空，官网无法核实"}
+                              "reason": t("版本号为空，官网无法核实")}
     # —— 自检 2：官方参照目标本身也做评估（更新文件稳定性）——
     for tag, kind_for in (("github", "github"), ("npm", "npm")):
         v = result["official"][tag].get("version")
@@ -1050,7 +1052,7 @@ def scan_plugins(include_core: bool = True, on_progress=None) -> dict:
 
     rep = ProgressReporter(on_progress, len(task_names), "plugins")
     # 任务还没开始前就广播一条，让 UI 进度条立刻“活”起来
-    rep.announce("准备就绪，开始枚举插件目录…" if not task_names else "")
+    rep.announce(t("准备就绪，开始枚举插件目录…") if not task_names else "")
 
     for kind, name, profile_name in task_names:
         if kind == "enabled":
@@ -1091,7 +1093,7 @@ def scan_plugins(include_core: bool = True, on_progress=None) -> dict:
                     "size_text": human_size(size),
                     "path": str(c),
                     "enabled": False,
-                    "source": "运行时内置",
+                    "source": t("运行时内置"),
                     "installed": dir_created_text(c),
                 }
             )
@@ -1176,7 +1178,7 @@ def scan_skills(root: Path | None = None, on_progress=None) -> dict:
     if not skills_root.is_dir():
         return {
             "items": [], "root": str(skills_root),
-            "errors": ["技能目录不存在: " + str(skills_root)],
+            "errors": [t("技能目录不存在: ") + str(skills_root)],
             "elapsed": 0.0, "speed": 0.0,
         }
     try:
@@ -1199,7 +1201,7 @@ def scan_skills(root: Path | None = None, on_progress=None) -> dict:
             candidates.append(e)
     rep = ProgressReporter(on_progress, len(candidates), "skills")
     if not candidates:
-        rep.announce("未发现技能目录…")
+        rep.announce(t("未发现技能目录…"))
     for e in candidates:
         # 目录技能：含 SKILL.md（或本身就是技能目录）
         if e.is_dir():
@@ -1271,7 +1273,7 @@ def check_plugin_latest(names: list, on_progress=None) -> dict:
             data = http_get_json(f"https://registry.npmjs.org/{enc}/latest", timeout=15)
             latest = (data or {}).get("version")
             if not latest:
-                err = "npm 无该包"
+                err = t("npm 无该包")
         except Exception as e:  # noqa: BLE001
             err = str(e)[:80]
         result[name] = {"latest": latest, "error": err}
@@ -1317,13 +1319,13 @@ def check_skill_latest(skill_items: list, on_progress=None) -> dict:
                         tags.sort(key=version_key)
                         latest = tags[-1]
                     else:
-                        err = "远端无版本 tag"
+                        err = t("远端无版本 tag")
                 else:
-                    err = "git ls-remote 失败"
+                    err = t("git ls-remote 失败")
             except Exception as e:  # noqa: BLE001
                 err = str(e)[:80]
         else:
-            err = "本地副本（无 git 来源，无法自动检测）"
+            err = t("本地副本（无 git 来源，无法自动检测）")
         result[name] = {"latest": latest, "error": err, "git_ok": git_ok}
         rep.step(name)
     rep.finish()
@@ -1379,7 +1381,7 @@ class _Throttle:
 
 def _fmt_eta(seconds: float) -> str:
     if seconds < 0 or seconds != seconds:  # NaN
-        return "计算中…"
+        return t("计算中…")
     if seconds < 60:
         return f"{seconds:.0f} 秒"
     return f"{int(seconds // 60)} 分 {int(seconds % 60)} 秒"
@@ -1481,7 +1483,7 @@ def _find_zip_root(zip_path: Path, extract_dir: Path, log=print, progress_cb=Non
                     return sub
     except Exception:  # noqa: BLE001
         pass
-    raise RuntimeError("下载的压缩包中未找到 DeepSeek Harness 源码根目录")
+    raise RuntimeError(t("下载的压缩包中未找到 DeepSeek Harness 源码根目录"))
 
 
 def _is_port_open(port: int = 3080, host: str = "127.0.0.1") -> bool:
@@ -1524,11 +1526,11 @@ def update_source_from_zip(
     if not target_dir.is_dir():
         raise RuntimeError(f"目标目录不存在：{target_dir}")
     if not _is_source_checkout(target_dir):
-        raise RuntimeError("该目录不是 DeepSeek Harness 源码检出（package.json name 非 @deepseek-ai/dsh-root）")
+        raise RuntimeError(t("该目录不是 DeepSeek Harness 源码检出（package.json name 非 @deepseek-ai/dsh-root）"))
     if _is_port_open(3080):
         raise RuntimeError(
-            "检测到 DeepSeek Harness 正在运行（http://127.0.0.1:3080 被占用）。\n"
-            "请先关闭正在运行的 DeepSeek Harness，再执行更新。"
+            t("检测到 DeepSeek Harness 正在运行（http://127.0.0.1:3080 被占用）。\n"
+            "请先关闭正在运行的 DeepSeek Harness，再执行更新。")
         )
 
     old_version = _read_dir_version(target_dir)
@@ -1548,12 +1550,12 @@ def update_source_from_zip(
         if progress_cb:
             progress_cb(1.0)
         new_version = _read_dir_version(new_root)
-        log(f"官方源码版本：{new_version}（当前：{old_version or '未知'}）")
+        log(f"官方源码版本：{new_version}（当前：{old_version or t('未知')}）")
 
         # ---- 备份（整体改名，快） ----
         log(f"备份原目录 → {backup_dir}")
         shutil.move(str(target_dir), str(backup_dir))
-        log("备份完成（原目录已改名）")
+        log(t("备份完成（原目录已改名）"))
 
         try:
             # ---- 先放入新源码：此时目标路径不存在，move 即整体改名到位 ----
@@ -1568,7 +1570,7 @@ def update_source_from_zip(
                     dst.parent.mkdir(parents=True, exist_ok=True)
                     log(f"保留 {k}（移回新目录）…")
                     shutil.move(str(src), str(dst))
-            log("新源码就位。")
+            log(t("新源码就位。"))
         except Exception as e:  # noqa: BLE001
             # 回滚
             log(f"替换失败，回滚中：{e}")
@@ -1579,10 +1581,10 @@ def update_source_from_zip(
 
         # ---- 可选 pnpm install ----
         if run_pnpm_install:
-            log("执行 pnpm install（新目录中安装依赖）…")
+            log(t("执行 pnpm install（新目录中安装依赖）…"))
             pnpm = shutil.which("pnpm") or shutil.which("pnpm.cmd")
             if not pnpm:
-                raise RuntimeError("未找到 pnpm。已替换源码，但未安装依赖；请手动运行 pnpm install")
+                raise RuntimeError(t("未找到 pnpm。已替换源码，但未安装依赖；请手动运行 pnpm install"))
             proc = subprocess.Popen(
                 [pnpm, "install"],
                 cwd=str(target_dir),
@@ -1602,7 +1604,7 @@ def update_source_from_zip(
             if code != 0:
                 raise RuntimeError(f"pnpm install 失败（退出码 {code}）。源码已替换，请手动排查依赖。")
 
-        msg = f"更新完成：{old_version or '旧版本'} → {new_version}"
+        msg = f"更新完成：{old_version or t('旧版本')} → {new_version}"
         if not keep_backup:
             shutil.rmtree(backup_dir, ignore_errors=True)
             backup_str = ""
@@ -1627,8 +1629,8 @@ def update_npm_global(pkg_dir: Path, log=print) -> dict:
     """通过 `npm install -g @deepseek-ai/dsh@latest` 更新 npm 全局安装。"""
     npm = shutil.which("npm") or shutil.which("npm.cmd")
     if not npm:
-        raise RuntimeError("未找到 npm，无法执行全局更新")
-    log("执行：npm install -g @deepseek-ai/dsh@latest")
+        raise RuntimeError(t("未找到 npm，无法执行全局更新"))
+    log(t("执行：npm install -g @deepseek-ai/dsh@latest"))
     proc = subprocess.Popen(
         [npm, "install", "-g", "@deepseek-ai/dsh@latest"],
         cwd=str(pkg_dir),
@@ -1660,6 +1662,7 @@ def update_npm_global(pkg_dir: Path, log=print) -> dict:
 # 等 DSH 真正支持后，再在这里接入实际动作。
 SETTINGS_DEFAULTS = {
     "gpu_acceleration": False,
+    "language": "auto",      # "auto"=跟随系统；否则 zh-CN / zh-TW / en / ja / ko
 }
 
 
@@ -1725,10 +1728,10 @@ def _selftest() -> int:
         except Exception:  # noqa: BLE001
             pass
     print("=" * 70)
-    print("DeepSeek Harness 更新器核心自测")
+    print(t("DeepSeek Harness 更新器核心自测"))
     print("=" * 70)
 
-    print("\n[1] 检测本机安装")
+    print(t("\n[1] 检测本机安装"))
     result = detect_all()
     for inst in result["installs"]:
         print(
@@ -1736,9 +1739,9 @@ def _selftest() -> int:
             f"version={inst['version'] or '?'}  状态={inst.get('status', '?')}"
         )
     if not result["installs"]:
-        print("  （未自动发现任何安装——源码检出可用 --add 手动指定）")
+        print(t("  （未自动发现任何安装——源码检出可用 --add 手动指定）"))
 
-    print("\n[2] 官方版本")
+    print(t("\n[2] 官方版本"))
     off = result["official"]
     gh = off["github"]
     npm = off["npm"]
@@ -1749,12 +1752,12 @@ def _selftest() -> int:
     if npm.get("error"):
         print(f"    npm error: {npm['error']}")
 
-    print("\n[3] 版本比较")
+    print(t("\n[3] 版本比较"))
     pairs = [("0.1.0-rc.5", "0.1.3-alpha.1"), ("0.1.2-rc.1", "0.1.2-rc.1"), ("1.0.0", "0.9.9")]
     for a, b in pairs:
         print(f"  {a} vs {b} -> {compare_versions(a, b)}")
 
-    print("\n[4] 插件扫描（启用 + 运行时内置，含效率统计）")
+    print(t("\n[4] 插件扫描（启用 + 运行时内置，含效率统计）"))
     plugins = scan_plugins(include_core=True)
     enabled = [p for p in plugins["items"] if p["enabled"]]
     core = [p for p in plugins["items"] if not p["enabled"]]
@@ -1768,7 +1771,7 @@ def _selftest() -> int:
     for e in plugins.get("errors", [])[:5]:
         print(f"  ! {e}")
 
-    print("\n[5] 技能扫描（含效率统计）")
+    print(t("\n[5] 技能扫描（含效率统计）"))
     skills = scan_skills()
     print(f"  技能目录：{skills.get('root')}")
     print(f"  技能数量：{len(skills['items'])}"
@@ -1781,7 +1784,7 @@ def _selftest() -> int:
     for e in skills.get("errors", []):
         print(f"  ! {e}")
 
-    print("\n[5b] 进度回调演示（skills 前 5 项）")
+    print(t("\n[5b] 进度回调演示（skills 前 5 项）"))
     counts = {"n": 0}
     def _cb(rep):
         counts["n"] += 1
@@ -1789,7 +1792,7 @@ def _selftest() -> int:
             print(f"    progress done={rep['done']}/{rep['total']} current={rep.get('current','')}")
     scan_skills(on_progress=_cb)
 
-    print("\n[6] zip 可达性（仅探测，不下载）")
+    print(t("\n[6] zip 可达性（仅探测，不下载）"))
     try:
         req = urllib.request.Request(ZIP_URL, headers=UA, method="HEAD")
         with urllib.request.urlopen(req, timeout=20) as resp:
@@ -1798,10 +1801,10 @@ def _selftest() -> int:
     except Exception as e:  # noqa: BLE001
         print(f"  探测失败：{e}")
 
-    print("\n[7] 端口占用检测（DSH Web 3080）")
+    print(t("\n[7] 端口占用检测（DSH Web 3080）"))
     print(f"  3080 监听中：{_is_port_open(3080)}")
 
-    print("\n自测结束。")
+    print(t("\n自测结束。"))
     return 0
 
 
