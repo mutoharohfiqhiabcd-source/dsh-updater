@@ -275,3 +275,8 @@ TABLES["ja"].update(_TABLE_JA)
 from i18n_ko import TABLE as _TABLE_KO
 
 TABLES["ko"].update(_TABLE_KO)
+
+from i18n_extra import EXTRA as _EXTRA
+
+for _lang, _tbl in _EXTRA.items():
+    TABLES.setdefault(_lang, {}).update(_tbl)
