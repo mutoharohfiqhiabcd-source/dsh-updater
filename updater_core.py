@@ -201,11 +201,11 @@ def assess_version(version: str, official: dict | None, kind_for_ref: str = "npm
         cur_node = _local_node_version()
         node_ok = _match_node_range(cur_node, engines) if cur_node else None
         if node_ok is True:
-            node_reason = f"本机 Node {cur_node} 满足官方要求 {engines}"
+            node_reason = t("本机 Node {cur_node} 满足官方要求 {engines}", cur_node=cur_node, engines=engines)
         elif node_ok is False:
-            node_reason = f"本机 Node {cur_node} 不满足官方要求 {engines}（不适配）"
+            node_reason = t("本机 Node {cur_node} 不满足官方要求 {engines}（不适配）", cur_node=cur_node, engines=engines)
         else:
-            node_reason = f"官方要求 Node {engines}，无法精确判定当前环境"
+            node_reason = t("官方要求 Node {engines}，无法精确判定当前环境", engines=engines)
     reason_parts.append(node_reason)
 
     # —— 分级 ——
@@ -226,7 +226,7 @@ def assess_version(version: str, official: dict | None, kind_for_ref: str = "npm
     elif grade == "unstable":
         pass
     else:
-        reason_parts.insert(0, f"官方发布记录中存在该版本（预发布/候选版本）")
+        reason_parts.insert(0, t("官方发布记录中存在该版本（预发布/候选版本）"))
 
     return {
         "version": v,
@@ -481,14 +481,14 @@ def fetch_self_latest(current_version: str = "") -> dict:
     try:
         cand = _pick_self_latest(http_get_json(SELF_RELEASES_URL, timeout=20))
     except Exception as e:  # noqa: BLE001
-        res["error"] = f"无法访问 GitHub Releases 接口：{type(e).__name__}: {e}"
+        res["error"] = t("无法访问 GitHub Releases 接口：{p1}: {e}", p1=type(e).__name__, e=e)
 
     if cand is None:
         # 退回用 tags（此时没有发布时间，按版本号取最大的那个）
         try:
             tags = http_get_json(SELF_TAGS_URL, timeout=20)
         except Exception as e:  # noqa: BLE001
-            res["error"] = res["error"] or f"无法访问 GitHub Tags 接口：{type(e).__name__}: {e}"
+            res["error"] = res["error"] or t("无法访问 GitHub Tags 接口：{p1}: {e}", p1=type(e).__name__, e=e)
             tags = None
         if isinstance(tags, list) and tags:
             best = max(tags, key=lambda t: version_key(str(t.get("name") or "")))
@@ -513,8 +513,8 @@ def fetch_self_latest(current_version: str = "") -> dict:
         # 远端最近发布的版本号反而更低。最常见的原因是「本地版本还没发布到
         # GitHub」（正常状态），少数情况才是历史 tag 顺序异常，所以措辞保持中性，
         # 不要一律说成异常。
-        res["note"] = (f"远端最近发布的是 {res['latest']}，低于当前版本 {current_version}；"
-                       "通常表示当前版本尚未发布到 GitHub。")
+        res["note"] = t("远端最近发布的是 {p1}，低于当前版本 {p2}；通常表示当前版本尚未发布到 GitHub。",
+                        p1=res['latest'], p2=current_version)
     return res
 
 
@@ -776,7 +776,7 @@ def detect_all() -> dict:
             {
                 "path": str(path),
                 "kind": kind,
-                "kind_label": f"运行时 profile ({Path(path).name})",
+                "kind_label": t("运行时 profile ({p1})", p1=Path(path).name),
                 "version": ver,
                 "cli_version": cli_ver,
                 "updateable": False,
@@ -1056,10 +1056,10 @@ def scan_plugins(include_core: bool = True, on_progress=None) -> dict:
 
     for kind, name, profile_name in task_names:
         if kind == "enabled":
-            rep.announce(f"解析启用插件 {name}")
+            rep.announce(t("解析启用插件 {name}", name=name))
             pkg_dir = _find_package_dir(name, search_roots)
             if pkg_dir is None:
-                errors.append(f"无法解析已启用插件 {name}（未在 node_modules 找到）")
+                errors.append(t("无法解析已启用插件 {name}（未在 node_modules 找到）", name=name))
                 rep.step(name)
                 continue
             data = _read_package_json(pkg_dir)
@@ -1080,7 +1080,7 @@ def scan_plugins(include_core: bool = True, on_progress=None) -> dict:
             )
         else:  # core
             c = Path(name)
-            rep.announce(f"统计内置包 @deepseek-ai/{c.name} 大小…")
+            rep.announce(t("统计内置包 @deepseek-ai/{p1} 大小…", p1=c.name))
             data = _read_package_json(c)
             ver = data.get("version") or ""
             size = dir_size(c, skip_dirs=("node_modules", ".git", ".pnpm"),
@@ -1107,8 +1107,8 @@ def scan_plugins(include_core: bool = True, on_progress=None) -> dict:
     items = dedup_plugins["items"]
     if not items and not errors:
         errors.append(
-            "未找到任何插件：请检查 DSH 数据目录是否存在，或本机是否安装了运行时插件包。"
-            f"\n当前搜索位置：{DSH_HOME}"
+            t("未找到任何插件：请检查 DSH 数据目录是否存在，或本机是否安装了运行时插件包。\n当前搜索位置：{p1}",
+              p1=DSH_HOME)
         )
     return {
         "items": items,
@@ -1206,7 +1206,7 @@ def scan_skills(root: Path | None = None, on_progress=None) -> dict:
         # 目录技能：含 SKILL.md（或本身就是技能目录）
         if e.is_dir():
             name = e.name
-            rep.announce(f"统计技能 {name} 文件与大小…")
+            rep.announce(t("统计技能 {name} 文件与大小…", name=name))
             ver = parse_skill_version(e) or ""
             size = dir_size(e, skip_dirs=("node_modules", ".git", ".pnpm", "node_modules.bak"),
                             limit_files=200_000, limit_seconds=5.0)
@@ -1224,7 +1224,7 @@ def scan_skills(root: Path | None = None, on_progress=None) -> dict:
         # 平铺单文件技能（*.md）
         else:
             name = e.stem
-            rep.announce(f"读取技能 {name}")
+            rep.announce(t("读取技能 {name}", name=name))
             size = e.stat().st_size if e.is_file() else 0
             items.append(
                 {
@@ -1265,7 +1265,7 @@ def check_plugin_latest(names: list, on_progress=None) -> dict:
     result = {}
     rep = ProgressReporter(on_progress, len(names), "plugin-latest")
     for name in names:
-        rep.announce(f"查询 {name} 最新版…")
+        rep.announce(t("查询 {name} 最新版…", name=name))
         latest, err = None, None
         try:
             from urllib.parse import quote
@@ -1294,7 +1294,7 @@ def check_skill_latest(skill_items: list, on_progress=None) -> dict:
     for it in skill_items:
         name = it.get("name", "")
         path = Path(it.get("path", ""))
-        rep.announce(f"检查技能 {name} 来源…")
+        rep.announce(t("检查技能 {name} 来源…", name=name))
         latest, err, git_ok = None, None, False
         if (path / ".git").is_dir():
             git_ok = True
@@ -1340,7 +1340,7 @@ def update_skills_git(skill_items: list, log=print) -> dict:
         if not (path / ".git").is_dir():
             skipped += 1
             continue
-        log(f"更新技能 {it.get('name', '')}…")
+        log(t("更新技能 {p1}…", p1=it.get('name', '')))
         try:
             r = subprocess.run(
                 ["git", "-C", str(path), "pull", "--ff-only"],
@@ -1349,7 +1349,7 @@ def update_skills_git(skill_items: list, log=print) -> dict:
             )
             if r.returncode == 0:
                 ok.append(it.get("name", ""))
-                log(f"  ✔ {it.get('name', '')} 已更新")
+                log(t("  ✔ {p1} 已更新", p1=it.get('name', '')))
             else:
                 failed.append((it.get("name", ""), r.stderr.strip()[:120]))
                 log(f"  ✖ {it.get('name', '')}: {r.stderr.strip()[:120]}")
@@ -1383,8 +1383,8 @@ def _fmt_eta(seconds: float) -> str:
     if seconds < 0 or seconds != seconds:  # NaN
         return t("计算中…")
     if seconds < 60:
-        return f"{seconds:.0f} 秒"
-    return f"{int(seconds // 60)} 分 {int(seconds % 60)} 秒"
+        return t("{seconds:.0f} 秒", seconds=seconds)
+    return t("{p1} 分 {p2} 秒", p1=int(seconds // 60), p2=int(seconds % 60))
 
 
 def _fmt_dl_progress(got: int, total: int, elapsed: float) -> str:
@@ -1403,7 +1403,7 @@ def download_file(url: str, dest: Path, log=print, timeout: float = 120.0,
                   progress_cb=None) -> Path:
     """流式下载到 dest，返回 dest。进度行经 log 输出（限流），数值经 progress_cb 回调。"""
     req = urllib.request.Request(url, headers=UA)
-    log(f"开始下载：{url}")
+    log(t("开始下载：{url}", url=url))
     throttle = _Throttle(min_gap=0.4, min_step=5.0)
     t0 = time.monotonic()
     with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -1421,12 +1421,12 @@ def download_file(url: str, dest: Path, log=print, timeout: float = 120.0,
                     pct = got / total * 100
                     if throttle.allow(pct):
                         elapsed = time.monotonic() - t0
-                        log(f"[下载] {_fmt_dl_progress(got, total, elapsed)}")
+                        log(t("[下载] {p1}", p1=_fmt_dl_progress(got, total, elapsed)))
                     if progress_cb:
                         progress_cb(min(pct / 100.0, 1.0))
     if progress_cb:
         progress_cb(1.0)
-    log(f"下载完成：{dest}（{human_size(got)}，用时 {time.monotonic() - t0:.1f} 秒）")
+    log(t("下载完成：{dest}（{p1}，用时 {p2:.1f} 秒）", dest=dest, p1=human_size(got), p2=time.monotonic() - t0))
     return dest
 
 
@@ -1444,7 +1444,7 @@ def _extract_zip_with_progress(zip_path: Path, extract_dir: Path,
             try:
                 zf.extract(info, extract_dir)
             except Exception as e:  # noqa: BLE001
-                log(f"解压跳过异常文件 {info.filename}: {e}")
+                log(t("解压跳过异常文件 {p1}: {e}", p1=info.filename, e=e))
             done_bytes += info.file_size
             done_files += 1
             if total_bytes:
@@ -1463,12 +1463,12 @@ def _extract_zip_with_progress(zip_path: Path, extract_dir: Path,
                     progress_cb(min(pct / 100.0, 1.0))
         if progress_cb:
             progress_cb(1.0)
-        log(f"解压完成：{done_files} 个文件，用时 {time.monotonic() - t0:.1f} 秒")
+        log(t("解压完成：{done_files} 个文件，用时 {p1:.1f} 秒", done_files=done_files, p1=time.monotonic() - t0))
 
 
 def _find_zip_root(zip_path: Path, extract_dir: Path, log=print, progress_cb=None) -> Path:
     """解压 zip 并返回其中包含 dsh-root package.json 的顶层目录。"""
-    log(f"解压中：{zip_path.name}")
+    log(t("解压中：{p1}", p1=zip_path.name))
     _extract_zip_with_progress(zip_path, extract_dir, log=log, progress_cb=progress_cb)
     # 找 name == @deepseek-ai/dsh-root 的目录
     try:
@@ -1524,7 +1524,7 @@ def update_source_from_zip(
     """
     target_dir = Path(target_dir)
     if not target_dir.is_dir():
-        raise RuntimeError(f"目标目录不存在：{target_dir}")
+        raise RuntimeError(t("目标目录不存在：{target_dir}", target_dir=target_dir))
     if not _is_source_checkout(target_dir):
         raise RuntimeError(t("该目录不是 DeepSeek Harness 源码检出（package.json name 非 @deepseek-ai/dsh-root）"))
     if _is_port_open(3080):
@@ -1550,16 +1550,16 @@ def update_source_from_zip(
         if progress_cb:
             progress_cb(1.0)
         new_version = _read_dir_version(new_root)
-        log(f"官方源码版本：{new_version}（当前：{old_version or t('未知')}）")
+        log(t("官方源码版本：{new_version}（当前：{p1}）", new_version=new_version, p1=old_version or t('未知')))
 
         # ---- 备份（整体改名，快） ----
-        log(f"备份原目录 → {backup_dir}")
+        log(t("备份原目录 → {backup_dir}", backup_dir=backup_dir))
         shutil.move(str(target_dir), str(backup_dir))
         log(t("备份完成（原目录已改名）"))
 
         try:
             # ---- 先放入新源码：此时目标路径不存在，move 即整体改名到位 ----
-            log(f"写入官方源码 → {target_dir}")
+            log(t("写入官方源码 → {target_dir}", target_dir=target_dir))
             shutil.move(str(new_root), str(target_dir))
             new_root = None  # 已移走
             # ---- 再把 node_modules/.git 从备份目录移回新目录（加速后续 install） ----
@@ -1568,16 +1568,16 @@ def update_source_from_zip(
                 if src.exists():
                     dst = target_dir / k
                     dst.parent.mkdir(parents=True, exist_ok=True)
-                    log(f"保留 {k}（移回新目录）…")
+                    log(t("保留 {k}（移回新目录）…", k=k))
                     shutil.move(str(src), str(dst))
             log(t("新源码就位。"))
         except Exception as e:  # noqa: BLE001
             # 回滚
-            log(f"替换失败，回滚中：{e}")
+            log(t("替换失败，回滚中：{e}", e=e))
             if target_dir.exists():
                 shutil.rmtree(target_dir, ignore_errors=True)
             shutil.move(str(backup_dir), str(target_dir))
-            raise RuntimeError(f"更新失败，已回滚：{e}") from e
+            raise RuntimeError(t("更新失败，已回滚：{e}", e=e)) from e
 
         # ---- 可选 pnpm install ----
         if run_pnpm_install:
@@ -1602,9 +1602,9 @@ def update_source_from_zip(
                     log(line)
             code = proc.wait()
             if code != 0:
-                raise RuntimeError(f"pnpm install 失败（退出码 {code}）。源码已替换，请手动排查依赖。")
+                raise RuntimeError(t("pnpm install 失败（退出码 {code}）。源码已替换，请手动排查依赖。", code=code))
 
-        msg = f"更新完成：{old_version or t('旧版本')} → {new_version}"
+        msg = t("更新完成：{p1} → {new_version}", p1=old_version or t('旧版本'), new_version=new_version)
         if not keep_backup:
             shutil.rmtree(backup_dir, ignore_errors=True)
             backup_str = ""
@@ -1648,10 +1648,10 @@ def update_npm_global(pkg_dir: Path, log=print) -> dict:
             log(line)
     code = proc.wait()
     if code != 0:
-        raise RuntimeError(f"npm install -g 失败（退出码 {code}）")
+        raise RuntimeError(t("npm install -g 失败（退出码 {code}）", code=code))
     # 重新读版本
     ver = _read_dir_version(pkg_dir)
-    return {"ok": True, "new_version": ver, "message": f"npm 全局更新完成，版本：{ver or '?'}"}
+    return {"ok": True, "new_version": ver, "message": t("npm 全局更新完成，版本：{p1}", p1=ver or '?')}
 
 
 # ---------------------------------------------------------------------------
@@ -1767,20 +1767,20 @@ def _selftest() -> int:
     for p in enabled[:12]:
         print(f"  ✔ {p['name']}  v{p['version'] or '?'}  {p['size_text']}")
     if len(enabled) > 12:
-        print(f"  … 其余 {len(enabled) - 12} 项")
+        print(t("  … 其余 {p1} 项", p1=len(enabled) - 12))
     for e in plugins.get("errors", [])[:5]:
         print(f"  ! {e}")
 
     print(t("\n[5] 技能扫描（含效率统计）"))
     skills = scan_skills()
-    print(f"  技能目录：{skills.get('root')}")
+    print(t("  技能目录：{p1}", p1=skills.get('root')))
     print(f"  技能数量：{len(skills['items'])}"
           f"｜用时 {skills.get('elapsed', 0):.2f}s｜"
           f"约 {skills.get('speed', 0):.1f} 项/秒")
     for s in skills["items"][:8]:
         print(f"  • {s['name']}  v{s['version'] or '-'}  {s['size_text']}")
     if len(skills["items"]) > 8:
-        print(f"  … 其余 {len(skills['items']) - 8} 项")
+        print(t("  … 其余 {p1} 项", p1=len(skills['items']) - 8))
     for e in skills.get("errors", []):
         print(f"  ! {e}")
 
@@ -1797,12 +1797,12 @@ def _selftest() -> int:
         req = urllib.request.Request(ZIP_URL, headers=UA, method="HEAD")
         with urllib.request.urlopen(req, timeout=20) as resp:
             total = resp.headers.get("Content-Length")
-            print(f"  {ZIP_URL}\n  HTTP {resp.status}  大小约 {human_size(int(total or 0))}")
+            print(t("  {ZIP_URL}\\n  HTTP {p1}  大小约 {p2}", ZIP_URL=ZIP_URL, p1=resp.status, p2=human_size(int(total or 0))))
     except Exception as e:  # noqa: BLE001
-        print(f"  探测失败：{e}")
+        print(t("  探测失败：{e}", e=e))
 
     print(t("\n[7] 端口占用检测（DSH Web 3080）"))
-    print(f"  3080 监听中：{_is_port_open(3080)}")
+    print(t("  3080 监听中：{p1}", p1=_is_port_open(3080)))
 
     print(t("\n自测结束。"))
     return 0

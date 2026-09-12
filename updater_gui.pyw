@@ -322,7 +322,7 @@ class UpdaterApp:
             pass
         self.btn_theme.configure(
             text=t("🌙 深色模式") if not self._dark else t("☀️ 浅色模式"))
-        self._log(f"已切换到{t('深色') if self._dark else t('浅色')}主题。")
+        self._log(t("已切换到{p1}主题。", p1=t('深色') if self._dark else t('浅色')))
 
     def _build_ui(self):
         self.root.configure(bg=CLR["bg"])
@@ -337,7 +337,7 @@ class UpdaterApp:
                                font=("Microsoft YaHei UI", 9), padx=10, pady=5)
         self.status.pack(side="left", fill="x", expand=True)
         self.lbl_version = tk.Label(
-            self._status_bar, text=f"当前版本 v{APP_VERSION} · 检查更新", anchor="e",
+            self._status_bar, text=t("当前版本 v{APP_VERSION} · 检查更新", APP_VERSION=APP_VERSION), anchor="e",
             background=CLR["status_bg"], foreground=CLR["accent"],
             font=("Microsoft YaHei UI", 9, "underline"), cursor="hand2",
             padx=10, pady=5)
@@ -496,7 +496,7 @@ class UpdaterApp:
         """value 0.0~1.0；text 留空则自动显示百分比。"""
         self.prog.configure(value=int(max(0.0, min(value, 1.0)) * 1000))
         if text is None:
-            text = f"进度：{value * 100:.1f}%"
+            text = t("进度：{p1:.1f}%", p1=value * 100)
         self.lbl_progress.configure(text=text)
 
     def _prog_done(self, text: str = "完成"):
@@ -534,7 +534,7 @@ class UpdaterApp:
     def _on_detect_done(self, result, err):
         self._set_busy(False)
         if err is not None:
-            messagebox.showerror(APP_TITLE, f"检测失败：\n{err}")
+            messagebox.showerror(APP_TITLE, t("检测失败：\\n{err}", err=err))
             self._set_status(t("检测失败"))
             return
         self.official = result["official"]
@@ -543,15 +543,15 @@ class UpdaterApp:
         gh_txt = gh.get("version") or t("获取失败")
         npm_txt = npm.get("version") or t("获取失败")
         if gh.get("version"):
-            gh_txt += f"（{gh.get('date', '')[:10]}）"
+            gh_txt += t("（{p1}）", p1=gh.get('date', '')[:10])
         gh_assess = gh.get("assess") or {}
         npm_assess = npm.get("assess") or {}
         if gh_assess.get("grade") in ("prerelease", "unstable"):
-            gh_txt += f"〔{gh_assess.get('grade_label', '')}〕"
+            gh_txt += t("〔{p1}〕", p1=gh_assess.get('grade_label', ''))
         if npm_assess.get("grade") in ("prerelease", "unstable", "candidate"):
-            npm_txt += f"〔{npm_assess.get('grade_label', '')}〕"
-        self.lbl_github.configure(text=f"🌐 官方 GitHub master：{gh_txt}")
-        self.lbl_npm.configure(text=f"📦 npm 发布版：{npm_txt}")
+            npm_txt += t("〔{p1}〕", p1=npm_assess.get('grade_label', ''))
+        self.lbl_github.configure(text=t("🌐 官方 GitHub master：{gh_txt}", gh_txt=gh_txt))
+        self.lbl_npm.configure(text=t("📦 npm 发布版：{npm_txt}", npm_txt=npm_txt))
 
         for iid in self.tree.get_children():
             self.tree.delete(iid)
@@ -573,15 +573,15 @@ class UpdaterApp:
             )
             assess = inst.get("assess") or {}
             if assess.get("reason") and assess.get("grade") != "stable":
-                self._log(f"    └ 稳定性判定：{assess['reason']}")
+                self._log(t("    └ 稳定性判定：{p1}", p1=assess['reason']))
         # —— 自检结果 ——
         sc = result.get("selfcheck") or {}
         if sc.get("duplicates"):
-            self._log(f"🛡 自检：发现并合并 {sc['duplicates']} 处重复安装（同一真实路径）")
+            self._log(t("🛡 自检：发现并合并 {p1} 处重复安装（同一真实路径）", p1=sc['duplicates']))
             for n in sc.get("notes", []):
                 self._log(f"    └ {n}")
-        self._set_status(f"检测完成：发现 {len(result['installs'])} 处安装"
-                         + (f"（自检合并重复 {sc.get('duplicates', 0)} 处）" if sc.get("duplicates") else ""))
+        self._set_status(t("检测完成：发现 {p1} 处安装", p1=len(result['installs']))
+                         + (t("（自检合并重复 {p1} 处）", p1=sc.get('duplicates', 0)) if sc.get("duplicates") else ""))
         if not result["installs"]:
             self._log(t("未自动发现安装，可使用界面按钮或自行检查路径。"))
 
@@ -664,7 +664,7 @@ class UpdaterApp:
     def _on_npm_update_done(self, result, err):
         self._set_busy(False)
         if err is not None:
-            messagebox.showerror(APP_TITLE, f"npm 更新失败：\n{err}")
+            messagebox.showerror(APP_TITLE, t("npm 更新失败：\\n{err}", err=err))
             self._set_status(t("npm 更新失败"))
             self._prog_reset(t("npm 更新失败"))
             return
@@ -691,7 +691,7 @@ class UpdaterApp:
         ttk.Label(frm, text=inst["path"], wraplength=560).grid(row=1, column=0, sticky="w")
         cur = inst["version"] or "—"
         ref = (self.official["github"]["version"] if self.official else None) or "—"
-        ttk.Label(frm, text=f"当前版本：{cur}    官方最新：{ref}").grid(row=2, column=0, sticky="w", pady=4)
+        ttk.Label(frm, text=t("当前版本：{cur}    官方最新：{ref}", cur=cur, ref=ref)).grid(row=2, column=0, sticky="w", pady=4)
         # 目标版本稳定性/适配性提示
         gh = (self.official or {}).get("github", {}) or {}
         gh_assess = gh.get("assess") or {}
@@ -699,15 +699,15 @@ class UpdaterApp:
             notes = []
             gl = gh_assess.get("grade_label", "")
             if gh_assess.get("grade") == "stable":
-                notes.append(f"官方最新 {ref} 为【{gl}】。")
+                notes.append(t("官方最新 {ref} 为【{gl}】。", ref=ref, gl=gl))
             elif gh_assess.get("grade") == "candidate":
-                notes.append(f"官方最新 {ref} 为【{gl}】，发布候选版。")
+                notes.append(t("官方最新 {ref} 为【{gl}】，发布候选版。", ref=ref, gl=gl))
             elif gh_assess.get("grade") == "prerelease":
-                notes.append(f"⚠ 官方最新 {ref} 为【{gl}】（预发布），可能存在兼容性变化，请按需更新。")
+                notes.append(t("⚠ 官方最新 {ref} 为【{gl}】（预发布），可能存在兼容性变化，请按需更新。", ref=ref, gl=gl))
             else:
-                notes.append(f"🛑 官方最新 {ref} 官网信息不足，判定为【{gl}】，请谨慎更新。")
+                notes.append(t("🛑 官方最新 {ref} 官网信息不足，判定为【{gl}】，请谨慎更新。", ref=ref, gl=gl))
             if gh_assess.get("node_reason"):
-                notes.append(f"适配性：{gh_assess['node_reason']}")
+                notes.append(t("适配性：{p1}", p1=gh_assess['node_reason']))
             if notes:
                 ttk.Label(
                     frm, text="\n".join(notes), wraplength=560, foreground="#b3261e",
@@ -752,20 +752,20 @@ class UpdaterApp:
     def _on_update_progress(self, value: float):
         """主窗口进度横幅：value 0.0~1.0（下载/解压阶段）。"""
         try:
-            self._prog_set(value, text=f"更新进度：{value * 100:.1f}%")
+            self._prog_set(value, text=t("更新进度：{p1:.1f}%", p1=value * 100))
         except tk.TclError:
             pass
 
     def _on_source_update_done(self, result, err):
         self._set_busy(False)
         if err is not None:
-            messagebox.showerror(APP_TITLE, f"更新失败：\n{err}")
+            messagebox.showerror(APP_TITLE, t("更新失败：\\n{err}", err=err))
             self._set_status(t("更新失败"))
             self._prog_reset(t("更新失败"))
             return
         msg = result.get("message", t("更新完成"))
         if result.get("backup"):
-            msg += f"\n\n原目录备份于：\n{result['backup']}"
+            msg += t("\\n\\n原目录备份于：\\n{p1}", p1=result['backup'])
         messagebox.showinfo(APP_TITLE, msg)
         self._set_status(t("更新完成"))
         self._prog_done(t("更新完成"))
@@ -926,7 +926,7 @@ class UpdaterApp:
                 speed = (done / elapsed) if elapsed > 0.05 else float("nan")
                 if speed == speed:  # 非 NaN
                     remain = (total - done) / speed if speed > 0 else 0.0
-                    speed_txt = f"{speed:.0f} 项/秒"
+                    speed_txt = t("{speed:.0f} 项/秒", speed=speed)
                     eta_txt = core._fmt_eta(remain) if remain > 0 else t("即将完成")
                 else:
                     speed_txt, eta_txt = t("计算中…"), t("计算中…")
@@ -948,7 +948,7 @@ class UpdaterApp:
                         pass
             except Exception as e:  # noqa: BLE001 —— 兜底：不允许进度回调打断窗口
                 try:
-                    banner.configure(text=f"进度刷新异常（扫描继续）：{e}",
+                    banner.configure(text=t("进度刷新异常（扫描继续）：{e}", e=e),
                                      fg=CLR["err"], bg="#fdeeec")
                 except tk.TclError:
                     pass
@@ -967,7 +967,7 @@ class UpdaterApp:
                 except tk.TclError:
                     return
                 try:
-                    self._log(f"✖ [{name}检测] 扫描失败：{err}")
+                    self._log(t("✖ [{name}检测] 扫描失败：{err}", name=name, err=err))
                 except Exception:  # noqa: BLE001
                     pass
                 return
@@ -978,7 +978,7 @@ class UpdaterApp:
                 speed = result.get("speed", 0.0)
                 if elapsed:
                     lbl_prog.configure(
-                        text=f"✔ 完成（用时 {elapsed:.2f} 秒，平均 {speed:.1f} 项/秒）"
+                        text=t("✔ 完成（用时 {elapsed:.2f} 秒，平均 {speed:.1f} 项/秒）", elapsed=elapsed, speed=speed)
                     )
                 else:
                     lbl_prog.configure(text=t("✔ 完成"))
@@ -992,22 +992,22 @@ class UpdaterApp:
             except Exception as e:  # noqa: BLE001 —— 兜底：不让填表异常卡死窗口
                 try:
                     lbl.configure(text=t("填表时遇到异常，已显示部分结果"))
-                    banner.configure(text=f"⚠ 列表渲染异常：{e}",
+                    banner.configure(text=t("⚠ 列表渲染异常：{e}", e=e),
                                      fg=CLR["err"], bg="#fdeeec")
                 except tk.TclError:
                     return
             root = result.get("root")
             errs = result.get("errors") or []
             if root:
-                lbl.configure(text=f"扫描目录：{root}")
+                lbl.configure(text=t("扫描目录：{root}", root=root))
             else:
                 lbl.configure(text=t("扫描完成"))
             total_size = sum(it.get("size", 0) for it in items)
-            eff = f"共 {len(items)} 项    合计 {core.human_size(total_size)}"
+            eff = t("共 {p1} 项    合计 {p2}", p1=len(items), p2=core.human_size(total_size))
             if elapsed:
-                eff += f"    用时 {elapsed:.2f} 秒"
+                eff += t("    用时 {elapsed:.2f} 秒", elapsed=elapsed)
             if speed:
-                eff += f"    平均 {speed:.1f} 项/秒"
+                eff += t("    平均 {speed:.1f} 项/秒", speed=speed)
             eff += t("    双击行可打开所在路径")
             status.configure(text=eff)
 
@@ -1083,7 +1083,7 @@ class UpdaterApp:
                 btn_latest.configure(state="disabled")
             except Exception:  # noqa: BLE001
                 pass
-            show_banner(f"正在检测 {len(state['items'])} 项的最新版本（联网查询）…", kind="ok")
+            show_banner(t("正在检测 {p1} 项的最新版本（联网查询）…", p1=len(state['items'])), kind="ok")
             w = Worker(self._log,
                        lambda res, e: _latest_done(res, e),
                        on_progress=lambda rep: lbl_prog.configure(
@@ -1100,15 +1100,15 @@ class UpdaterApp:
             except Exception:  # noqa: BLE001
                 pass
             if err is not None:
-                show_banner(f"检测最新版失败：{err}", kind="err")
+                show_banner(t("检测最新版失败：{err}", err=err), kind="err")
                 return
             upd = _apply_latest_result(res or {})
             total = len(state["items"])
-            show_banner(f"✅ 最新版检测完成：共 {total} 项，其中 {upd} 项有可用更新"
+            show_banner(t("✅ 最新版检测完成：共 {total} 项，其中 {upd} 项有可用更新", total=total, upd=upd)
                         + (t("（技能若无 git 来源则无法检测）") if name == t("技能") else "")
                         + t("。可在主窗口对源码检出/npm 全局执行更新。"),
                         kind="ok")
-            status.configure(text=f"检测完成（最新版）：{total} 项 / 可更新 {upd} 项")
+            status.configure(text=t("检测完成（最新版）：{total} 项 / 可更新 {upd} 项", total=total, upd=upd))
 
         def _sync_update():
             """技能：git pull 同步；插件：更新其 npm 全局 dsh（内置包随其更新）。"""
@@ -1131,7 +1131,7 @@ class UpdaterApp:
                 show_banner(t("没有可 git 同步的技能：本机技能均为拷贝安装（无 .git 来源），"
                             "请在官网手动下载覆盖。"), kind="warn")
                 return
-            show_banner(f"正在 git 同步 {len(items_git)} 个技能…", kind="ok")
+            show_banner(t("正在 git 同步 {p1} 个技能…", p1=len(items_git)), kind="ok")
             w = Worker(self._log,
                        lambda res, e: _sync_done(res, e))
             state["_sync_worker"] = w
@@ -1140,13 +1140,13 @@ class UpdaterApp:
 
         def _sync_done(res, err):
             if err is not None:
-                show_banner(f"同步失败：{err}", kind="err")
+                show_banner(t("同步失败：{err}", err=err), kind="err")
                 return
             res = res or {}
             okn = len(res.get("ok", []))
             fail = res.get("failed", [])
             skip = res.get("skipped", 0)
-            txt = f"✅ git 同步完成：成功 {okn}，失败 {len(fail)}，跳过 {skip}（无 git 来源）"
+            txt = t("✅ git 同步完成：成功 {okn}，失败 {p1}，跳过 {skip}（无 git 来源）", okn=okn, p1=len(fail), skip=skip)
             if fail:
                 txt += "\n" + "\n".join(f"   ✖ {a}: {b}" for a, b in fail[:5])
             show_banner(txt, kind="ok" if not fail else "warn")
@@ -1184,7 +1184,7 @@ class UpdaterApp:
             return  # 窗口已关闭
         except Exception as e:  # noqa: BLE001 —— 兜底：显示错误且继续轮询，杜绝“卡在正在扫描”
             try:
-                self._log(f"⚠ 扫描轮询异常（继续等待）：{e}")
+                self._log(t("⚠ 扫描轮询异常（继续等待）：{e}", e=e))
             except Exception:  # noqa: BLE001
                 pass
         try:
@@ -1220,7 +1220,7 @@ class UpdaterApp:
             plugins = core.scan_plugins(include_core=True)
             skills = core.scan_skills()
         except Exception as e:  # noqa: BLE001
-            messagebox.showerror(APP_TITLE, f"扫描失败：{e}")
+            messagebox.showerror(APP_TITLE, t("扫描失败：{e}", e=e))
             return
         wrote = []
         with open(base / "dsh_plugins.csv", "w", newline="", encoding="utf-8-sig") as f:
@@ -1236,7 +1236,7 @@ class UpdaterApp:
             for it in skills["items"]:
                 w.writerow([it["name"], it["version"], it["size"], it["size_text"], it["path"]])
         wrote.append("dsh_skills.csv")
-        messagebox.showinfo(APP_TITLE, f"已导出：\n" + "\n".join(str(base / n) for n in wrote))
+        messagebox.showinfo(APP_TITLE, t("已导出：\\n") + "\n".join(str(base / n) for n in wrote))
 
     # ---------------- 设置 ----------------
     def show_settings(self):
@@ -1244,10 +1244,8 @@ class UpdaterApp:
         skills_root = core.scan_skills().get("root", "")
         messagebox.showinfo(
             APP_TITLE,
-            f"DSH 数据目录（DSH_HOME）：\n{env}\n\n"
-            f"技能目录：\n{skills_root}\n\n"
-            f"本更新器设置文件：\n{core.settings_file()}\n\n"
-            "提示：可通过环境变量 DSH_HOME / DSH_SKILLS 更改检测位置。",
+            t("DSH 数据目录（DSH_HOME）：\n{p1}\n\n技能目录：\n{p2}\n\n本更新器设置文件：\n{p3}\n\n提示：可通过环境变量 DSH_HOME / DSH_SKILLS 更改检测位置。",
+              p1=env, p2=skills_root, p3=core.settings_file()),
         )
 
     # ---------------- 偏好设置 ----------------
@@ -1291,7 +1289,7 @@ class UpdaterApp:
                 target.parent.mkdir(parents=True, exist_ok=True)
             self._try_open(str(target if target.exists() else target.parent))
         except Exception as e:  # noqa: BLE001
-            self._log(f"⚠ 无法打开设置文件：{e}")
+            self._log(t("⚠ 无法打开设置文件：{e}", e=e))
 
     def _on_gpu_toggle(self):
         """GPU 加速偏好变化时立即持久化。
@@ -1304,8 +1302,8 @@ class UpdaterApp:
         ok = core.save_settings(self.settings)
         state = t("开启") if value else t("关闭")
         if ok:
-            self._log(f"偏好已保存：GPU 加速 = {state}（仅本地记录，DSH 暂无对应选项）")
-            self._set_status(f"偏好已保存：GPU 加速 {state}")
+            self._log(t("偏好已保存：GPU 加速 = {state}（仅本地记录，DSH 暂无对应选项）", state=state))
+            self._set_status(t("偏好已保存：GPU 加速 {state}", state=state))
         else:
             self._log(f"⚠ 偏好保存失败（{core.settings_file()} 不可写）："
                       f"GPU 加速 = {state}，本次选择仅当前会话有效")
@@ -1337,7 +1335,7 @@ class UpdaterApp:
         win = tk.Toplevel(self.root)
         self._upd_win = win
         self._upd_url = core.SELF_REPO_URL
-        win.title(f"检查更新 · 当前 v{APP_VERSION}")
+        win.title(t("检查更新 · 当前 v{APP_VERSION}", APP_VERSION=APP_VERSION))
         win.resizable(False, False)
         win.configure(bg=CLR["bg"])
         self._apply_icon(win)
@@ -1349,7 +1347,7 @@ class UpdaterApp:
         frm.pack(fill="both", expand=True)
         tk.Label(frm, text=t("检查更新器自身更新"), anchor="w", background=CLR["bg"],
                  foreground=CLR["text"], font=("Microsoft YaHei UI", 11, "bold")).pack(anchor="w")
-        tk.Label(frm, text=f"当前版本：v{APP_VERSION}", anchor="w", background=CLR["bg"],
+        tk.Label(frm, text=t("当前版本：v{APP_VERSION}", APP_VERSION=APP_VERSION), anchor="w", background=CLR["bg"],
                  foreground=CLR["text_dim"], font=("Microsoft YaHei UI", 9)).pack(
                      anchor="w", pady=(2, 10))
 
@@ -1390,7 +1388,7 @@ class UpdaterApp:
             import webbrowser
             webbrowser.open(url)
         except Exception as e:  # noqa: BLE001
-            self._log(f"⚠ 无法打开链接：{e}")
+            self._log(t("⚠ 无法打开链接：{e}", e=e))
 
     def _on_upd_check_done(self, result, err):
         if self._upd_win is None:
@@ -1412,18 +1410,18 @@ class UpdaterApp:
             self._upd_open_btn.configure(state="normal")
 
             if result.get("has_update"):
-                self._upd_status.configure(text=f"🎉 发现新版本：{tag}", foreground=CLR["ok"])
-                lines = [f"当前 v{APP_VERSION}  →  最新 {tag}"]
+                self._upd_status.configure(text=t("🎉 发现新版本：{tag}", tag=tag), foreground=CLR["ok"])
+                lines = [t("当前 v{APP_VERSION}  →  最新 {tag}", APP_VERSION=APP_VERSION, tag=tag)]
                 if date:
-                    lines.append(f"发布时间：{date}")
+                    lines.append(t("发布时间：{date}", date=date))
                 lines.append(t("点击左下按钮打开 GitHub 页面。"))
                 self._upd_detail.configure(text="\n".join(lines))
             else:
-                self._upd_status.configure(text=f"✅ 已是最新版本（v{APP_VERSION}）",
+                self._upd_status.configure(text=t("✅ 已是最新版本（v{APP_VERSION}）", APP_VERSION=APP_VERSION),
                                            foreground=CLR["ok"])
-                line = f"远端最近发布：{tag}"
+                line = t("远端最近发布：{tag}", tag=tag)
                 if date:
-                    line += f"（{date}）"
+                    line += t("（{date}）", date=date)
                 if result.get("note"):
                     line += "\n\n" + result["note"]
                 self._upd_detail.configure(text=line)
@@ -1475,11 +1473,11 @@ class UpdaterApp:
         label = assess.get("grade_label", inst.get("grade_label", ""))
         reason = assess.get("reason", "")
         color_note = {"stable": "✅", "candidate": "🟠", "prerelease": "🟣", "unstable": "🛑"}.get(grade, "")
-        head = f"◉ 版本性质：{label} {color_note}" if with_title else f"{label} {color_note}"
+        head = t("◉ 版本性质：{label} {color_note}", label=label, color_note=color_note) if with_title else f"{label} {color_note}"
         if grade == "unstable":
             head += t("\n   ⚠ 未能在官网核实该版本 —— 视为【不稳定版】，请谨慎使用")
         if reason:
-            head += f"\n   依据：{reason}"
+            head += t("\\n   依据：{reason}", reason=reason)
         return head
 
     def _kind_tip_text(self, inst: dict) -> str:
@@ -1498,18 +1496,18 @@ class UpdaterApp:
             need = inst.get("status") in (t("可更新"), t("可更新(npm)"))
         recent = gh.get("recent") or []
         lines = [
-            f"【{info['title']}】",
+            t("【{p1}】", p1=info['title']),
             "",
-            f"◉ 这是什么：{info['what']}",
+            t("◉ 这是什么：{p1}", p1=info['what']),
             "",
-            f"◉ 在 DSH 中作用：{info['role']}",
+            t("◉ 在 DSH 中作用：{p1}", p1=info['role']),
             "",
-            f"◉ 版本：本地 {local}   ∥   官方({info['ref']}) {ref}",
-            f"◉ 是否需要立即更新：{t('是，有可用更新') if need else t('否，已是最新')}",
+            t("◉ 版本：本地 {local}   ∥   官方({p1}) {ref}", local=local, p1=info['ref'], ref=ref),
+            t("◉ 是否需要立即更新：{p1}", p1=t('是，有可用更新') if need else t('否，已是最新')),
             "",
             self._stability_line(inst),
             "",
-            f"◉ 更新方式：{info['how']}",
+            t("◉ 更新方式：{p1}", p1=info['how']),
         ]
         if need and recent:
             lines.append("")
@@ -1522,7 +1520,7 @@ class UpdaterApp:
 
     def _nature_tip_text(self, inst: dict) -> str:
         ver = inst.get("version") or "—"
-        return f"当前版本 {ver}\n\n{self._stability_line(inst)}"
+        return t("当前版本 {ver}\\n\\n{p1}", ver=ver, p1=self._stability_line(inst))
 
     def _status_tip_text(self, inst: dict) -> str:
         status = inst.get("status", "—")
@@ -1532,9 +1530,9 @@ class UpdaterApp:
             base = (f"当前版本 {ver} 落后于官方，可点击\n"
                     f"「⬇ 更新所选安装」一键升级（自动备份后替换）。")
         elif status == t("已是最新"):
-            base = f"当前版本 {ver} 与官方一致，无需更新。"
+            base = t("当前版本 {ver} 与官方一致，无需更新。", ver=ver)
         else:
-            base = f"状态：{status}\n（版本信息：{ver}）"
+            base = t("状态：{status}\\n（版本信息：{ver}）", status=status, ver=ver)
         # 若该版本不稳定，追加醒目提示
         grade = inst.get("grade", "")
         if grade == "unstable":
