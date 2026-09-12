@@ -9,6 +9,12 @@ on:
       - "v*"
   workflow_dispatch:
 
+env:
+  # 强制 UTF-8：本工具大量输出中文，Windows runner 的默认控制台编码
+  # 会让 print 抛 UnicodeEncodeError（本地是 UTF-8 所以不会暴露）
+  PYTHONIOENCODING: utf-8
+  PYTHONUTF8: "1"
+
 permissions:
   contents: write
 
