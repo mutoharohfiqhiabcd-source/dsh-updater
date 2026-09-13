@@ -222,8 +222,7 @@ class UpdaterApp:
         i18n.set_language(str(self.settings.get("language") or i18n.AUTO))
         self._setup_style()
         self._build_ui()
-        self._log(f"{t(APP_TITLE)} 已启动。\nDSH 数据目录：{core.DSH_HOME}\n"
-                  f"设置文件：{core.preferences_file()}")
+        self._log(t("{p1} 已启动。\nDSH 数据目录：{p2}\n设置文件：{p3}", p1=t(APP_TITLE), p2=core.DSH_HOME, p3=core.preferences_file()))
         self._log(t("正在自动检测本机安装与官方版本…"))
         # 右上角先用缓存里的版本与上次检测时间填充
         self._render_cached_official()
@@ -236,7 +235,7 @@ class UpdaterApp:
                 self._set_cache_label(cached.get("saved_at", ""))
                 self._log(t("已载入上次检测结果（{p1}），正在后台重新检测…", p1=stamp))
             except Exception as e:  # noqa: BLE001
-                self._log(f"⚠ 载入检测缓存失败：{e}")
+                self._log(t("⚠ 载入检测缓存失败：{e}", e=e))
         self.refresh_all()
 
     # ---------------- UI 构建 ----------------
@@ -636,8 +635,7 @@ class UpdaterApp:
             iid = self.tree.insert("", "end", values=row, tags=(tag,))
             self.install_rows.append({"iid": iid, "data": inst})
             self._log(
-                f"[{inst['kind_label']}] {inst['path']}\n"
-                f"    当前 {inst['version'] or '—'} / 性质 {nature} / 官方 {ref or '—'} / {inst.get('status', '—')}"
+                t("[{p1}] {p2}\n    当前 {p3} / 性质 {nature} / 官方 {p4} / {p5}", p1=inst['kind_label'], p2=inst['path'], p3=inst['version'] or '—', nature=nature, p4=ref or '—', p5=inst.get('status', '—'))
             )
             assess = inst.get("assess") or {}
             if assess.get("reason") and assess.get("grade") != "stable":
@@ -713,10 +711,7 @@ class UpdaterApp:
     def _confirm_npm_update(self, inst):
         if not messagebox.askyesno(
             t(APP_TITLE),
-            f"将更新 npm 全局安装：\n{inst['path']}\n"
-            f"当前版本：{inst['version'] or '—'}\n"
-            f"将执行：npm install -g @deepseek-ai/dsh@latest\n\n"
-            f"是否继续？",
+            t("将更新 npm 全局安装：\n{p1}\n当前版本：{p2}\n将执行：npm install -g @deepseek-ai/dsh@latest\n\n是否继续？", p1=inst['path'], p2=inst['version'] or '—'),
         ):
             return
         self._set_busy(True)
@@ -1026,8 +1021,7 @@ class UpdaterApp:
                     speed_txt, eta_txt = t("计算中…"), t("计算中…")
                 try:
                     lbl_prog.configure(
-                        text=f"已检测 {done}/{total} 项（{pct * 100:.1f}%）｜当前：{current or '—'}"
-                             f"｜{speed_txt}｜已用 {elapsed:.1f} 秒｜预计还需 {eta_txt}"
+                        text=t("已检测 {done}/{total} 项（{p1:.1f}%）｜当前：{p2}｜{speed_txt}｜已用 {elapsed:.1f} 秒｜预计还需 {eta_txt}", done=done, total=total, p1=pct * 100, p2=current or '—', speed_txt=speed_txt, elapsed=elapsed, eta_txt=eta_txt)
                     )
                 except tk.TclError:
                     pass
@@ -1036,8 +1030,7 @@ class UpdaterApp:
                 if not finished and mark > state["last_log_pct"]:
                     state["last_log_pct"] = mark
                     try:
-                        self._log(f"📊 [{name}检测] 进度 {pct * 100:.0f}%"
-                                  f"（{done}/{total}）｜{speed_txt}｜已用 {elapsed:.1f}s")
+                        self._log(t("📊 [{name}检测] 进度 {p1:.0f}%（{done}/{total}）｜{speed_txt}｜已用 {elapsed:.1f}s", name=name, p1=pct * 100, done=done, total=total, speed_txt=speed_txt, elapsed=elapsed))
                     except Exception:  # noqa: BLE001
                         pass
             except Exception as e:  # noqa: BLE001 —— 兜底：不允许进度回调打断窗口
@@ -1054,8 +1047,7 @@ class UpdaterApp:
                     bar.configure(value=1000)
                     lbl.configure(text=t("扫描出错"))
                     lbl_prog.configure(text=t("✖ 扫描异常"))
-                    show_banner(f"扫描失败：{err}\n请点击「↻ 重新扫描」重试，"
-                                f"或检查 DSH 数据目录（DSH_HOME={core.DSH_HOME}）。",
+                    show_banner(t("扫描失败：{err}\n请点击「↻ 重新扫描」重试，或检查 DSH 数据目录（DSH_HOME={p1}）。", err=err, p1=core.DSH_HOME),
                                 kind="err")
                     status.configure(text=t("扫描异常 — 未获得结果"))
                 except tk.TclError:
@@ -1110,15 +1102,10 @@ class UpdaterApp:
                 show_banner("⚠ " + t("；").join(str(e) for e in errs[:3])
                             + ("…" if len(errs) > 3 else ""), kind="err")
             elif not items:
-                show_banner(f"未检测到任何{name}。\n"
-                            f"扫描目录：{root or t('（未指定）')}\n"
-                            f"请确认 DSH 数据目录（DSH_HOME={core.DSH_HOME}）正确，"
-                            f"或点击「↻ 重新扫描」重试。", kind="warn")
+                show_banner(t("未检测到任何{name}。\n扫描目录：{p1}\n请确认 DSH 数据目录（DSH_HOME={p2}）正确，或点击「↻ 重新扫描」重试。", name=name, p1=root or t('（未指定）'), p2=core.DSH_HOME), kind="warn")
             else:
-                show_banner(f"✅ 检测成功：共 {len(items)} 项，合计 {core.human_size(total_size)}，"
-                            f"用时 {elapsed:.2f} 秒（平均 {speed:.1f} 项/秒）")
-            self._log(f"✅ [{name}检测] 完成：{len(items)} 项，合计 {core.human_size(total_size)}，"
-                      f"用时 {elapsed:.2f}s（{speed:.1f} 项/秒）")
+                show_banner(t("✅ 检测成功：共 {p1} 项，合计 {p2}，用时 {elapsed:.2f} 秒（平均 {speed:.1f} 项/秒）", p1=len(items), p2=core.human_size(total_size), elapsed=elapsed, speed=speed))
+            self._log(t("✅ [{name}检测] 完成：{p1} 项，合计 {p2}，用时 {elapsed:.2f}s（{speed:.1f} 项/秒）", name=name, p1=len(items), p2=core.human_size(total_size), elapsed=elapsed, speed=speed))
 
         # ---- 状态：供“检测最新版/同步更新”使用 ----
         state["items"] = []
@@ -1181,8 +1168,7 @@ class UpdaterApp:
             w = Worker(self._log,
                        lambda res, e: _latest_done(res, e),
                        on_progress=lambda rep: lbl_prog.configure(
-                           text=f"检测最新版：{rep.get('done', 0)}/{rep.get('total', 0)}"
-                                f"｜当前 {rep.get('current', '') or '—'}"))
+                           text=t("检测最新版：{p1}/{p2}｜当前 {p3}", p1=rep.get('done', 0), p2=rep.get('total', 0), p3=rep.get('current', '') or '—')))
             state["_latest_worker"] = w
             items_snapshot = list(state["items"])
             w.start(latest_fn, items_snapshot)
@@ -1372,8 +1358,7 @@ class UpdaterApp:
         self._tip_win = None
         self._upd_win = None
         self._build_ui()
-        self._log(f"界面语言：{i18n.language_display_name(i18n.get_language())}"
-                  f"（{i18n.get_language()}）")
+        self._log(t("界面语言：{p1}（{p2}）", p1=i18n.language_display_name(i18n.get_language()), p2=i18n.get_language()))
         cached = core.load_detection_cache()
         if cached.get("result"):
             try:
@@ -1382,7 +1367,7 @@ class UpdaterApp:
                 self._log(t("已按新语言重建界面（沿用上次检测结果，未重新扫描）"))
                 return
             except Exception as e:  # noqa: BLE001
-                self._log(f"⚠ 用缓存重建界面失败，改为重新检测：{e}")
+                self._log(t("⚠ 用缓存重建界面失败，改为重新检测：{e}", e=e))
         self.refresh_all()
 
     def _open_settings_file(self):
@@ -1409,8 +1394,7 @@ class UpdaterApp:
             self._log(t("偏好已保存：GPU 加速 = {state}（仅本地记录，DSH 暂无对应选项）", state=state))
             self._set_status(t("偏好已保存：GPU 加速 {state}", state=state))
         else:
-            self._log(f"⚠ 偏好保存失败（{core.preferences_file()} 不可写）："
-                      f"GPU 加速 = {state}，本次选择仅当前会话有效")
+            self._log(t("⚠ 偏好保存失败（{p1} 不可写）：GPU 加速 = {state}，本次选择仅当前会话有效", p1=core.preferences_file(), state=state))
             self._set_status(t("偏好保存失败，详见日志"))
 
     # ---------------- 检查更新器自身更新（右下角版本号） ----------------
@@ -1633,8 +1617,7 @@ class UpdaterApp:
         ver = inst.get("version") or "—"
         base = ""
         if status == t("可更新"):
-            base = (f"当前版本 {ver} 落后于官方，可点击\n"
-                    f"「⬇ 更新所选安装」一键升级（自动备份后替换）。")
+            base = (t("当前版本 {ver} 落后于官方，可点击\n「⬇ 更新所选安装」一键升级（自动备份后替换）。", ver=ver))
         elif status == t("已是最新"):
             base = t("当前版本 {ver} 与官方一致，无需更新。", ver=ver)
         else:

@@ -1405,9 +1405,7 @@ def _fmt_dl_progress(got: int, total: int, elapsed: float) -> str:
     speed = (got / elapsed) if elapsed > 1.0 else (got / max(elapsed, 1e-9))
     eta = (remain / speed) if speed > 0 and total else 0.0
     return (
-        f"已下载 {got / 1024 / 1024:.1f} / {total / 1024 / 1024:.1f} MB"
-        f"（{pct:.0f}%）｜剩余 {human_size(remain)}｜速度 {speed / 1024 / 1024:.2f} MB/s"
-        f"｜预计还需 {_fmt_eta(eta)}｜已用 {elapsed:.1f} 秒"
+        t("已下载 {p1:.1f} / {p2:.1f} MB（{pct:.0f}%）｜剩余 {p3}｜速度 {p4:.2f} MB/s｜预计还需 {p5}｜已用 {elapsed:.1f} 秒", p1=got / 1024 / 1024, p2=total / 1024 / 1024, pct=pct, p3=human_size(remain), p4=speed / 1024 / 1024, p5=_fmt_eta(eta), elapsed=elapsed)
     )
 
 
@@ -1466,10 +1464,7 @@ def _extract_zip_with_progress(zip_path: Path, extract_dir: Path,
                     speed = (done_bytes / elapsed) if elapsed > 1.0 else (done_bytes / max(elapsed, 1e-9))
                     eta = ((total_bytes - done_bytes) / speed) if speed > 0 else 0.0
                     log(
-                        f"[解压] 文件 {done_files}/{len(infos)}｜"
-                        f"{done_bytes / 1024 / 1024:.1f}/{total_bytes / 1024 / 1024:.1f} MB"
-                        f"（{pct:.0f}%）｜速度 {speed / 1024 / 1024:.2f} MB/s"
-                        f"｜预计还需 {_fmt_eta(eta)}｜已用 {elapsed:.1f} 秒"
+                        t("[解压] 文件 {done_files}/{p1}｜{p2:.1f}/{p3:.1f} MB（{pct:.0f}%）｜速度 {p4:.2f} MB/s｜预计还需 {p5}｜已用 {elapsed:.1f} 秒", done_files=done_files, p1=len(infos), p2=done_bytes / 1024 / 1024, p3=total_bytes / 1024 / 1024, pct=pct, p4=speed / 1024 / 1024, p5=_fmt_eta(eta), elapsed=elapsed)
                     )
                 if progress_cb:
                     progress_cb(min(pct / 100.0, 1.0))
@@ -2000,8 +1995,7 @@ def _selftest() -> int:
     result = detect_all()
     for inst in result["installs"]:
         print(
-            f"  • [{inst['kind_label']}] {inst['path']}  "
-            f"version={inst['version'] or '?'}  状态={inst.get('status', '?')}"
+            t("  • [{p1}] {p2}  version={p3}  状态={p4}", p1=inst['kind_label'], p2=inst['path'], p3=inst['version'] or '?', p4=inst.get('status', '?'))
         )
     if not result["installs"]:
         print(t("  （未自动发现任何安装——源码检出可用 --add 手动指定）"))
@@ -2026,9 +2020,7 @@ def _selftest() -> int:
     plugins = scan_plugins(include_core=True)
     enabled = [p for p in plugins["items"] if p["enabled"]]
     core = [p for p in plugins["items"] if not p["enabled"]]
-    print(f"  共 {len(plugins['items'])} 项：启用 {len(enabled)}，运行时内置 {len(core)}"
-          f"｜用时 {plugins.get('elapsed', 0):.2f}s｜"
-          f"约 {plugins.get('speed', 0):.1f} 项/秒")
+    print(t("  共 {p1} 项：启用 {p2}，运行时内置 {p3}｜用时 {p4:.2f}s｜约 {p5:.1f} 项/秒", p1=len(plugins['items']), p2=len(enabled), p3=len(core), p4=plugins.get('elapsed', 0), p5=plugins.get('speed', 0)))
     for p in enabled[:12]:
         print(f"  ✔ {p['name']}  v{p['version'] or '?'}  {p['size_text']}")
     if len(enabled) > 12:
@@ -2039,9 +2031,7 @@ def _selftest() -> int:
     print(t("\n[5] 技能扫描（含效率统计）"))
     skills = scan_skills()
     print(t("  技能目录：{p1}", p1=skills.get('root')))
-    print(f"  技能数量：{len(skills['items'])}"
-          f"｜用时 {skills.get('elapsed', 0):.2f}s｜"
-          f"约 {skills.get('speed', 0):.1f} 项/秒")
+    print(t("  技能数量：{p1}｜用时 {p2:.2f}s｜约 {p3:.1f} 项/秒", p1=len(skills['items']), p2=skills.get('elapsed', 0), p3=skills.get('speed', 0)))
     for s in skills["items"][:8]:
         print(f"  • {s['name']}  v{s['version'] or '-'}  {s['size_text']}")
     if len(skills["items"]) > 8:
