@@ -772,3 +772,34 @@ def test_rebuild_hint_key_translated_in_all_languages():
            "若你用它直接启动 DSH，请重新执行：pnpm install && pnpm run build")
     for code in ("zh-TW", "en", "ja", "ko"):
         assert key in _i18n.TABLES.get(code, {}), f"{code} 缺该提示的翻译"
+
+
+def test_every_literal_translation_key_exists_in_all_tables():
+    """源码里每个 t("...") 字面量键，四种语言都必须有译文。
+
+    专防两类实际发生过的遗漏：
+    1. 折行拼接合并后产生的**新模板键**忘了补翻译（会静默回退中文）
+    2. 手工重建键时把换行写成了字面量反斜杠+n，导致键不匹配
+       （曾让「请先关闭 DSH 再更新 npm」这条重要提示失效）
+    """
+    import ast
+    keys = {}
+    for fname in ("updater_gui.pyw", "updater_core.py"):
+        tree = ast.parse((REPO_ROOT / fname).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id == "t" and node.args):
+                try:
+                    v = ast.literal_eval(node.args[0])
+                except Exception:
+                    continue
+                if isinstance(v, str) and v.strip():
+                    keys.setdefault(v, f"{fname}:{node.lineno}")
+    assert keys, "没有提取到任何翻译键，提取逻辑可能失效"
+    bad = []
+    for code in ("zh-TW", "en", "ja", "ko"):
+        table = i18n.TABLES.get(code, {})
+        for k in keys:
+            if k not in table:
+                bad.append(f"{code} 缺 {keys[k]} {k[:40]!r}")
+    assert not bad, "翻译缺失：\n" + "\n".join(bad[:12])

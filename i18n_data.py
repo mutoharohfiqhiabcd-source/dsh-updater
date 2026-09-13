@@ -285,3 +285,8 @@ from i18n_missing import TABLES_EXTRA as _MISSING
 
 for _lang, _tbl in _MISSING.items():
     TABLES.setdefault(_lang, {}).update(_tbl)
+
+from i18n_merged import TABLES_EXTRA_2 as _MERGED
+
+for _lang, _tbl in _MERGED.items():
+    TABLES.setdefault(_lang, {}).update(_tbl)
