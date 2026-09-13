@@ -1,7 +1,7 @@
 v0.7.2 更新说明（与 v0.7.1 相比）
 
 > 本文件是「最新一版」的更新说明，发布新版本前请改成当版内容。
-> GitHub Actions 在推送 `*` tag 时会把这个文件的内容作为 Release 说明（`body_path`）。
+> GitHub Actions 在推送 `v*` tag 时会把这个文件的内容作为 Release 说明（`body_path`）。
 
 ## ✨ 新增
 
