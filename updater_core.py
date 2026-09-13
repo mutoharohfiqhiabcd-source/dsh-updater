@@ -1555,6 +1555,7 @@ def update_source_from_zip(
     extract_dir = tmp / "extract"
     extract_dir.mkdir()
     new_root = None
+    rebuild_hint = ""
     try:
         # ---- 下载并解压 ----
         download_file(ZIP_URL, zip_path, log=log, progress_cb=progress_cb)
@@ -1583,6 +1584,18 @@ def update_source_from_zip(
                     log(t("保留 {k}（移回新目录）…", k=k))
                     shutil.move(str(src), str(dst))
             log(t("新源码就位。"))
+            # 构建产物不在官方源码 zip 里、也不在 _KEEP_DIRS 中，替换后必然消失。
+            # 若用户依赖它直接启动 DSH，这里必须提示，否则更新完启动失败且看不出原因。
+            try:
+                _had = (backup_dir / "apps" / "cli" / "lib").exists()
+                _has = (target_dir / "apps" / "cli" / "lib").exists()
+                if _had and not _has:
+                    rebuild_hint = t(
+                        "注意：原目录中的构建产物（apps/cli/lib）未随源码保留。\n"
+                        "若你用它直接启动 DSH，请重新执行：pnpm install && pnpm run build")
+                    log(rebuild_hint)
+            except Exception:  # noqa: BLE001
+                pass
         except Exception as e:  # noqa: BLE001
             # 回滚
             log(t("替换失败，回滚中：{e}", e=e))
@@ -1617,6 +1630,8 @@ def update_source_from_zip(
                 raise RuntimeError(t("pnpm install 失败（退出码 {code}）。源码已替换，请手动排查依赖。", code=code))
 
         msg = t("更新完成：{p1} → {new_version}", p1=old_version or t('旧版本'), new_version=new_version)
+        if rebuild_hint:
+            msg = msg + "\n\n" + rebuild_hint
         if not keep_backup:
             shutil.rmtree(backup_dir, ignore_errors=True)
             backup_str = ""

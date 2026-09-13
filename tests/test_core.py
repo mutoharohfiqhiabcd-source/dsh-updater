@@ -758,3 +758,17 @@ def test_npm_update_blocked_when_dsh_running(monkeypatch):
 def test_running_node_count_returns_int():
     """无论平台都要返回整数，不能抛异常。"""
     assert isinstance(core.running_node_count(), int)
+
+
+def test_rebuild_hint_key_translated_in_all_languages():
+    """源码更新后「请重新构建」的提示必须四语言齐全。
+
+    这条提示关系到用户能否启动 DSH（构建产物 apps/cli/lib 不在保留列表里），
+    缺翻译就会在最需要它的时候显示成看不懂的语言。
+    """
+    import i18n as _i18n
+    NL = chr(92) + "n"
+    key = ("注意：原目录中的构建产物（apps/cli/lib）未随源码保留。" + NL +
+           "若你用它直接启动 DSH，请重新执行：pnpm install && pnpm run build")
+    for code in ("zh-TW", "en", "ja", "ko"):
+        assert key in _i18n.TABLES.get(code, {}), f"{code} 缺该提示的翻译"

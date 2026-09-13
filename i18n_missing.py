@@ -131,3 +131,13 @@ for _lang, _pair in {
         '检测到 DeepSeek Harness 正在运行（http://127.0.0.1:3080 被占用）。\\n更新 npm 全局安装会替换正在使用的原生模块，可能失败甚至损坏安装。\\n请先关闭 DeepSeek Harness，再执行更新。': _pair[0],
         '提示：检测到 {p1} 个 node 进程。若它们正在使用 dsh，npm 可能因文件占用而失败；建议先全部关闭。': _pair[1],
     })
+
+
+# 源码更新后提示重新构建（v0.7.1）
+for _lang, _val in {
+    'en': 'Note: build output (apps/cli/lib) from the original directory was not kept.\\nIf you start DSH from it, run: pnpm install && pnpm run build',
+    'zh-TW': '注意：原目錄中的建置產物（apps/cli/lib）未隨原始碼保留。\\n若你用它直接啟動 DSH，請重新執行：pnpm install && pnpm run build',
+    'ja': '注意：元のディレクトリのビルド成果物（apps/cli/lib）は引き継がれませんでした。\\nそれを使って DSH を起動している場合は、次を再実行してください：pnpm install && pnpm run build',
+    'ko': '주의: 원래 폴더의 빌드 산출물(apps/cli/lib)은 유지되지 않았습니다.\\n이를 사용해 DSH를 시작한다면 다음을 다시 실행하세요: pnpm install && pnpm run build',
+}.items():
+    TABLES_EXTRA.setdefault(_lang, {}).update({'注意：原目录中的构建产物（apps/cli/lib）未随源码保留。\\n若你用它直接启动 DSH，请重新执行：pnpm install && pnpm run build': _val})
