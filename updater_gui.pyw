@@ -20,7 +20,7 @@ import i18n
 from i18n import t
 
 APP_TITLE = "DeepSeek Harness 自动检测与更新器"
-APP_VERSION = "0.7.1"
+APP_VERSION = "0.7.2"
 
 
 def resource_path(name: str) -> str:
