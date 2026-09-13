@@ -141,3 +141,19 @@ for _lang, _val in {
     'ko': '주의: 원래 폴더의 빌드 산출물(apps/cli/lib)은 유지되지 않았습니다.\\n이를 사용해 DSH를 시작한다면 다음을 다시 실행하세요: pnpm install && pnpm run build',
 }.items():
     TABLES_EXTRA.setdefault(_lang, {}).update({'注意：原目录中的构建产物（apps/cli/lib）未随源码保留。\\n若你用它直接启动 DSH，请重新执行：pnpm install && pnpm run build': _val})
+
+
+# 源码更新的 pnpm 步骤（v0.7.2）
+for _lang, _vals in {
+    'en': ('Running {p1} …', 'pnpm not found. Source was replaced but {p1} was not run; please run it manually.', '{p1} failed (exit code {p2}). Source was replaced; please investigate manually.', 'Run pnpm run build after replacing (required to start from a source checkout)'),
+    'zh-TW': ('執行 {p1} …', '找不到 pnpm。原始碼已取代，但未執行 {p1}；請手動執行。', '{p1} 失敗（退出碼 {p2}）。原始碼已取代，請手動排查。', '取代後自動執行 pnpm run build（原始碼版啟動必需）'),
+    'ja': ('{p1} を実行中 …', 'pnpm が見つかりません。ソースは置き換え済みですが {p1} は未実行です。手動で実行してください。', '{p1} が失敗しました（終了コード {p2}）。ソースは置き換え済みです。手動で確認してください。', '置き換え後に pnpm run build を実行（ソース版の起動に必須）'),
+    'ko': ('{p1} 실행 중 …', 'pnpm을 찾지 못했습니다. 소스는 교체되었지만 {p1}은(는) 실행되지 않았습니다. 직접 실행하세요.', '{p1} 실패(종료 코드 {p2}). 소스는 교체되었습니다. 직접 확인하세요.', '교체 후 pnpm run build 실행(소스판 시작에 필수)'),
+}.items():
+    for _k, _v in zip({
+        '执行 {p1} …',
+        '未找到 pnpm。已替换源码，但未执行 {p1}；请手动运行。',
+        '{p1} 失败（退出码 {p2}）。源码已替换，请手动排查。',
+        '替换后自动运行 pnpm run build（源码版启动必需）',
+    }, _vals):
+        TABLES_EXTRA.setdefault(_lang, {}).update({_k: _v})

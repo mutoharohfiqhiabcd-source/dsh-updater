@@ -783,10 +783,15 @@ class UpdaterApp:
             foreground="#a00", wraplength=560,
         ).grid(row=4, column=0, sticky="w", pady=6)
         self.var_pnpm = tk.BooleanVar(value=False)
+        self.var_build = tk.BooleanVar(value=False)
         ttk.Checkbutton(
             frm, text=t("替换后自动运行 pnpm install（推荐，用于同步依赖）"),
             variable=self.var_pnpm,
         ).grid(row=5, column=0, sticky="w", pady=4)
+        ttk.Checkbutton(
+            frm, text=t("替换后自动运行 pnpm run build（源码版启动必需）"),
+            variable=self.var_build,
+        ).grid(row=6, column=0, sticky="w", pady=4)
         btns = ttk.Frame(frm)
         btns.grid(row=6, column=0, sticky="e", pady=(10, 0))
         ttk.Button(btns, text=t("开始更新"), command=lambda: self._run_source_update(inst, ask)).pack(side="left", padx=4)
@@ -802,11 +807,13 @@ class UpdaterApp:
         worker = Worker(self._log, self._on_source_update_done, on_progress=self._on_update_progress)
         self._worker = worker
         run_pnpm = self.var_pnpm.get()
+        run_build = self.var_build.get()
         worker.start(
             lambda: core.update_source_from_zip(
                 Path(inst["path"]),
                 run_pnpm,
                 log=worker.emit_log,
+                run_pnpm_build=run_build,
                 progress_cb=worker.emit_progress,
             )
         )

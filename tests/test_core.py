@@ -803,3 +803,22 @@ def test_every_literal_translation_key_exists_in_all_tables():
             if k not in table:
                 bad.append(f"{code} 缺 {keys[k]} {k[:40]!r}")
     assert not bad, "翻译缺失：\n" + "\n".join(bad[:12])
+
+
+def test_update_source_accepts_build_flag():
+    """update_source_from_zip 必须接受 run_pnpm_build（否则 GUI 传参会 TypeError）。"""
+    import inspect
+    sig = inspect.signature(core.update_source_from_zip)
+    assert "run_pnpm_build" in sig.parameters
+    assert sig.parameters["run_pnpm_build"].default is False
+
+
+def test_run_pnpm_step_reports_missing_pnpm(monkeypatch, tmp_path):
+    """找不到 pnpm 时要给出可读错误，而不是静默跳过构建。
+
+    否则用户会拿到"更新成功"却启动失败（缺 client bundles），很难排查。
+    """
+    monkeypatch.setattr(core.shutil, "which", lambda *a, **k: None)
+    with pytest.raises(RuntimeError) as ei:
+        core._run_pnpm_step(tmp_path, ["run", "build"], lambda *a: None, "pnpm run build")
+    assert "pnpm" in str(ei.value)

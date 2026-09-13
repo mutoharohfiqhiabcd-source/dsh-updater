@@ -1505,6 +1505,33 @@ def _is_port_open(port: int = 3080, host: str = "127.0.0.1") -> bool:
         s.close()
 
 
+def _run_pnpm_step(target_dir: Path, args: list, log, what: str) -> None:
+    """在工作目录里执行一条 pnpm 命令，输出实时写入日志；失败抛 RuntimeError。"""
+    pnpm = shutil.which("pnpm") or shutil.which("pnpm.cmd")
+    if not pnpm:
+        raise RuntimeError(t("未找到 pnpm。已替换源码，但未执行 {p1}；请手动运行。", p1=what))
+    log(t("执行 {p1} …", p1=what))
+    proc = subprocess.Popen(
+        [pnpm, *args],
+        cwd=str(target_dir),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        line = line.rstrip()
+        if line:
+            log(line)
+    code = proc.wait()
+    if code != 0:
+        raise RuntimeError(
+            t("{p1} 失败（退出码 {p2}）。源码已替换，请手动排查。", p1=what, p2=code))
+
+
 def update_source_from_zip(
     target_dir: Path,
     run_pnpm_install: bool = False,
@@ -1512,6 +1539,7 @@ def update_source_from_zip(
     keep_backup: bool = True,
     backup_root: Path | None = None,
     progress_cb=None,
+    run_pnpm_build: bool = False,
 ) -> dict:
     """
     下载官方源码 zip → 备份 → 整目录替换 target_dir（保留 node_modules/.git）。
@@ -1599,30 +1627,13 @@ def update_source_from_zip(
             shutil.move(str(backup_dir), str(target_dir))
             raise RuntimeError(t("更新失败，已回滚：{e}", e=e)) from e
 
-        # ---- 可选 pnpm install ----
+        # ---- 可选 pnpm install / pnpm run build ----
+        # build 是源码版启动的必需步骤：构建产物（apps/cli/lib 等）不在源码 zip 里，
+        # 也不在 _KEEP_DIRS 中，整目录替换后已经丢失。
         if run_pnpm_install:
-            log(t("执行 pnpm install（新目录中安装依赖）…"))
-            pnpm = shutil.which("pnpm") or shutil.which("pnpm.cmd")
-            if not pnpm:
-                raise RuntimeError(t("未找到 pnpm。已替换源码，但未安装依赖；请手动运行 pnpm install"))
-            proc = subprocess.Popen(
-                [pnpm, "install"],
-                cwd=str(target_dir),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
-            assert proc.stdout is not None
-            for line in proc.stdout:
-                line = line.rstrip()
-                if line:
-                    log(line)
-            code = proc.wait()
-            if code != 0:
-                raise RuntimeError(t("pnpm install 失败（退出码 {code}）。源码已替换，请手动排查依赖。", code=code))
+            _run_pnpm_step(target_dir, ["install"], log, "pnpm install")
+        if run_pnpm_build:
+            _run_pnpm_step(target_dir, ["run", "build"], log, "pnpm run build")
 
         msg = t("更新完成：{p1} → {new_version}", p1=old_version or t('旧版本'), new_version=new_version)
         if rebuild_hint:
