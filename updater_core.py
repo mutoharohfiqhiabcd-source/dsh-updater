@@ -1637,11 +1637,44 @@ def update_source_from_zip(
 # ---------------------------------------------------------------------------
 # npm 全局更新
 # ---------------------------------------------------------------------------
+def running_node_count() -> int:
+    """统计正在运行的 node 进程数。
+
+    更新 npm 全局安装前用它做提示：DSH（或任何 node 进程）占用着原生模块
+    （如 sharp-win32-x64-*.node）时，npm 无法替换这些文件，会以
+    「EPERM: operation not permitted, unlink ...」失败，并可能留下**损坏的
+    安装树**（缺少子模块文件）。所以必须在动手前拦住用户。
+    """
+    if os.name != "nt":
+        try:
+            r = subprocess.run(["pgrep", "-c", "node"], capture_output=True,
+                               text=True, timeout=10)
+            return int((r.stdout or "0").strip() or 0) if r.returncode == 0 else 0
+        except Exception:  # noqa: BLE001
+            return 0
+    try:
+        r = subprocess.run(["tasklist", "/FI", "IMAGENAME eq node.exe", "/NH"],
+                           capture_output=True, text=True, timeout=15,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        if r.returncode != 0:
+            return 0
+        return sum(1 for ln in (r.stdout or "").splitlines() if "node.exe" in ln.lower())
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 def update_npm_global(pkg_dir: Path, log=print) -> dict:
     """通过 `npm install -g @deepseek-ai/dsh@latest` 更新 npm 全局安装。"""
     npm = shutil.which("npm") or shutil.which("npm.cmd")
     if not npm:
         raise RuntimeError(t("未找到 npm，无法执行全局更新"))
+    # DSH 正在运行时原生模块被占用，npm 替换会以 EPERM 失败，并可能留下
+    # 损坏的安装树 —— 先拦住，而不是让用户去猜那句 EPERM。
+    if _is_port_open(3080):
+        raise RuntimeError(t("检测到 DeepSeek Harness 正在运行（http://127.0.0.1:3080 被占用）。\n更新 npm 全局安装会替换正在使用的原生模块，可能失败甚至损坏安装。\n请先关闭 DeepSeek Harness，再执行更新。"))
+    _nodes = running_node_count()
+    if _nodes:
+        log(t("提示：检测到 {p1} 个 node 进程。若它们正在使用 dsh，npm 可能因文件占用而失败；建议先全部关闭。", p1=_nodes))
     log(t("执行：npm install -g @deepseek-ai/dsh@latest"))
     proc = subprocess.Popen(
         [npm, "install", "-g", "@deepseek-ai/dsh@latest"],

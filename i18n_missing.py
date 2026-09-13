@@ -118,3 +118,16 @@ _MISSING: dict[str, dict[str, str]] = {
 }
 
 TABLES_EXTRA = _MISSING
+
+
+# npm 全局更新前的进程检查提示（v0.7.1）
+for _lang, _pair in {
+    'en': ('DeepSeek Harness appears to be running (http://127.0.0.1:3080 is in use).\\nUpdating the npm global install replaces native modules that are currently in use; it may fail or even corrupt the install.\\nClose DeepSeek Harness first, then run the update.', 'Note: {p1} node process(es) detected. If they are using dsh, npm may fail because files are locked; closing them all is recommended.'),
+    'zh-TW': ('偵測到 DeepSeek Harness 正在執行（http://127.0.0.1:3080 被佔用）。\\n更新 npm 全域安裝會取代正在使用的原生模組，可能失敗甚至損壞安裝。\\n請先關閉 DeepSeek Harness，再執行更新。', '提示：偵測到 {p1} 個 node 行程。若它們正在使用 dsh，npm 可能因檔案佔用而失敗；建議先全部關閉。'),
+    'ja': ('DeepSeek Harness が実行中のようです（http://127.0.0.1:3080 が使用中）。\\nnpm グローバルインストールの更新は使用中のネイティブモジュールを置き換えるため、失敗したりインストールを破損させる可能性があります。\\n先に DeepSeek Harness を終了してから更新してください。', 'ヒント：{p1} 個の node プロセスを検出しました。それらが dsh を使用中だとファイルがロックされ npm が失敗することがあります。すべて終了することを推奨します。'),
+    'ko': ('DeepSeek Harness가 실행 중인 것으로 보입니다(http://127.0.0.1:3080 사용 중).\\nnpm 전역 설치를 업데이트하면 사용 중인 네이티브 모듈을 교체하므로 실패하거나 설치가 손상될 수 있습니다.\\n먼저 DeepSeek Harness를 종료한 뒤 업데이트하세요.', '안내: node 프로세스 {p1}개가 감지되었습니다. 이들이 dsh를 사용 중이면 파일이 잠겨 npm이 실패할 수 있으니 모두 종료하는 것을 권장합니다.'),
+}.items():
+    TABLES_EXTRA.setdefault(_lang, {}).update({
+        '检测到 DeepSeek Harness 正在运行（http://127.0.0.1:3080 被占用）。\\n更新 npm 全局安装会替换正在使用的原生模块，可能失败甚至损坏安装。\\n请先关闭 DeepSeek Harness，再执行更新。': _pair[0],
+        '提示：检测到 {p1} 个 node 进程。若它们正在使用 dsh，npm 可能因文件占用而失败；建议先全部关闭。': _pair[1],
+    })

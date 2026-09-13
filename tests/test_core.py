@@ -739,3 +739,22 @@ def test_kind_info_strings_exist_in_tables():
                 if val not in i18n.TABLES.get(code, {}):
                     missing.append(f"{code}:{kind}:{field}")
     assert not missing, "KIND_INFO 文案缺翻译：" + ", ".join(sorted(set(missing)))
+
+
+def test_npm_update_blocked_when_dsh_running(monkeypatch):
+    """DSH 在运行时必须拦住 npm 全局更新。
+
+    否则 npm 会替换正在被占用的原生模块（如 sharp-win32-x64-*.node），
+    以「EPERM: operation not permitted, unlink ...」失败，并可能留下
+    缺少子模块文件的损坏安装树——这正是实际发生过的故障。
+    """
+    from pathlib import Path as _P
+    monkeypatch.setattr(core, "_is_port_open", lambda *a, **k: True)
+    with pytest.raises(RuntimeError) as ei:
+        core.update_npm_global(_P("."))
+    assert "3080" in str(ei.value)
+
+
+def test_running_node_count_returns_int():
+    """无论平台都要返回整数，不能抛异常。"""
+    assert isinstance(core.running_node_count(), int)
