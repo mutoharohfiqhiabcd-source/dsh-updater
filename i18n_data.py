@@ -300,3 +300,8 @@ from i18n_rollback import TABLES_ROLLBACK as _RB
 
 for _lang, _tbl in _RB.items():
     TABLES.setdefault(_lang, {}).update(_tbl)
+
+from i18n_inv import TABLES_INV as _INV
+
+for _lang, _tbl in _INV.items():
+    TABLES.setdefault(_lang, {}).update(_tbl)

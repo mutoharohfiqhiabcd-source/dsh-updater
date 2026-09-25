@@ -428,12 +428,11 @@ class UpdaterApp:
         self.btn_update = ttk.Button(btns, text=t("⬇ 更新所选安装"), style="Accent.TButton",
                                      command=self.update_selected)
         self.btn_update.pack(side="left", padx=(0, 8))
-        self.btn_plugins = ttk.Button(btns, text=t("🧩 插件检测"), command=self.open_plugins)
+        self.btn_plugins = ttk.Button(btns, text=t("🧩 插件 / 技能"),
+                                      command=self.open_plugins)
         self.btn_plugins.pack(side="left", padx=(0, 8))
-        self.btn_skills = ttk.Button(btns, text=t("📚 技能检测"), command=self.open_skills)
         self.btn_rollback = ttk.Button(btns, text=t("↩ 回滚"), command=self.open_rollback)
         self.btn_rollback.pack(side="left", padx=(0, 8))
-        self.btn_skills.pack(side="left", padx=(0, 8))
         self.btn_refresh = ttk.Button(btns, text=t("🔄 重新检测"), command=self.refresh_all)
         self.btn_refresh.pack(side="left")
         self.btn_settings = ttk.Button(btns, text=t("⚙ 数据目录"), command=self.show_settings)
@@ -579,7 +578,7 @@ class UpdaterApp:
     def _set_busy(self, busy: bool):
         self.busy = busy
         state = "disabled" if busy else "normal"
-        for b in (self.btn_refresh, self.btn_update, self.btn_plugins, self.btn_skills,
+        for b in (self.btn_refresh, self.btn_update, self.btn_plugins,
                   self.btn_export):
             b.configure(state=state)
 
@@ -896,13 +895,13 @@ class UpdaterApp:
         self.refresh_all()
 
     # ---------------- 插件 / 技能窗口 ----------------
-    def open_plugins(self):
-        """插件窗口 —— 暗绿主题：检测最新版走 npm，同步更新支持 git/npm 源插件。"""
+    def _build_plugins_tab(self):
+        """构建「插件」分页 —— 暗绿强调色：检测最新版走 npm，同步更新支持 git/npm 源插件。"""
         accent = ACCENT_PLUGIN["dark" if self._dark else "light"]
         self._open_inventory_window(
             name=t("插件"),
             title=t("🧩 DeepSeek Harness 插件检测"),
-            reopen=self.open_plugins,
+            reopen=self._build_plugins_tab,
             accent=accent,
             accent_label=t("暗绿主题"),
             columns=(("name", t("名称")), ("version", t("版本")), ("size", t("大小")),
@@ -921,13 +920,13 @@ class UpdaterApp:
             kind="plugin",
         )
 
-    def open_skills(self):
-        """技能窗口 —— 暗紫主题：检测最新版走 git 来源，可同步 git pull。"""
+    def _build_skills_tab(self):
+        """构建「技能」分页 —— 暗紫强调色：检测最新版走 git 来源，可同步 git pull。"""
         accent = ACCENT_SKILL["dark" if self._dark else "light"]
         self._open_inventory_window(
             name=t("技能"),
             title=t("📚 DeepSeek Harness 技能检测"),
-            reopen=self.open_skills,
+            reopen=self._build_skills_tab,
             accent=accent,
             accent_label=t("暗紫主题"),
             columns=(("name", t("名称")), ("version", t("版本")), ("size", t("大小")),
@@ -1084,16 +1083,85 @@ class UpdaterApp:
             self._log(t("已记住来源：{p1} → {p2}", p1=name, p2=url))
         self._open_url(url)
 
+    # ---------------- 插件 / 技能（合并为一个窗口，分页区分） ----------------
+    def open_plugins(self):
+        """打开「插件 / 技能」窗口，停在插件页（两页都会构建，切换即时）。"""
+        self._build_plugins_tab()
+        self._build_skills_tab()
+        self._select_inv_tab("插件")
+
+    def open_skills(self):
+        """打开「插件 / 技能」窗口，停在技能页。"""
+        self._build_plugins_tab()
+        self._build_skills_tab()
+        self._select_inv_tab("技能")
+
+    def _inventory_host(self):
+        """插件与技能共用的窗口（内含 Notebook）；已存在则复用并置顶。"""
+        win = getattr(self, "_inv_win", None)
+        if win is not None:
+            try:
+                if win.winfo_exists():
+                    win.deiconify()
+                    win.lift()
+                    return win
+            except tk.TclError:
+                pass
+        win = tk.Toplevel(self.root)
+        self._inv_win = win
+        win.title(f"{t('🧩 插件 / 📚 技能 检测')} · {APP_VERSION}")
+        win.geometry("1120x680")
+        self._apply_icon(win)
+        win.transient(self.root)
+        win.configure(bg=CLR["bg"])
+        self._inv_nb = ttk.Notebook(win)
+        self._inv_nb.pack(fill="both", expand=True, padx=6, pady=(6, 0))
+        return win
+
+    def _inventory_tab(self, host, name, title, accent):
+        """在共用窗口里新建并选中某类别的分页，返回可容纳内容的 Frame。
+
+        同类别已存在时先移除旧页：重新扫描就是「拆掉重建这一页」。
+        """
+        nb = self._inv_nb
+        for tab_id in nb.tabs():
+            try:
+                w = nb.nametowidget(tab_id)
+            except Exception:  # noqa: BLE001
+                continue
+            if getattr(w, "_tab_key", None) == name:
+                nb.forget(tab_id)
+                try:
+                    w.destroy()
+                except tk.TclError:
+                    pass
+        frame = ttk.Frame(nb)
+        frame._tab_key = name  # type: ignore[attr-defined]
+        nb.add(frame, text=name)
+        nb.select(frame)
+        return frame
+
+    def _select_inv_tab(self, key: str) -> None:
+        """把 Notebook 切到指定类别（按稳定 key，不按翻译后的标题）。"""
+        nb = getattr(self, "_inv_nb", None)
+        if nb is None:
+            return
+        for tab_id in nb.tabs():
+            try:
+                w = nb.nametowidget(tab_id)
+            except Exception:  # noqa: BLE001
+                continue
+            if getattr(w, "_tab_key", None) == key:
+                nb.select(tab_id)
+                return
+
     def _open_inventory_window(self, name, title, reopen, accent, accent_label,
                                columns, widths, scan_fn, scan_kwargs, row_of,
                                detail_of, latest_fn=None, update_fn=None,
                                update_label=None, kind="skill"):
-        win = tk.Toplevel(self.root)
-        win.title(f"{title} · {APP_VERSION} · {accent_label}")
-        win.geometry("1080x640")
-        self._apply_icon(win)
-        win.transient(self.root)
-        win.configure(bg=CLR["bg"])
+        # 插件与技能合并进同一个窗口，各自占一页（强调色仍按类别区分）
+        host = self._inventory_host()
+        win = self._inventory_tab(host, name, title, accent)
 
         # 自定义强调样式（插件=暗绿 / 技能=暗紫）
         accent_style = f"{name}.Accent.TButton"
