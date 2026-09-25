@@ -957,7 +957,12 @@ class UpdaterApp:
         win = tk.Toplevel(self.root)
         self._rb_win = win
         win.title(t("回滚到之前的版本"))
-        win.geometry("880x560")
+        # 高度按条目数定：固定高度会在条目少时留出大片空白
+        _rows = sum(len(targets.get(k) or []) + 1
+                    for k in ("source", "npm", "profile"))
+        _h = max(340, min(700, 200 + _rows * 30))
+        win.geometry(f"940x{_h}")
+        win.minsize(760, 320)
         win.transient(self.root)
 
         ttk.Label(win, text=t("勾选要回滚的项（可多选，跨类别也可以一起选），再点「回滚所选」。"),
@@ -965,28 +970,43 @@ class UpdaterApp:
 
         wrap = ttk.Frame(win)
         wrap.pack(fill="both", expand=True, padx=12)
-        tree = ttk.Treeview(wrap, columns=("pick", "what", "when"),
-                            show="tree headings", height=15)
-        tree.heading("#0", text=t("类别 / 位置"))
+        # 只有三列：原先的「时间」列在所有旧备份上都是空的（历史记录是本次
+        # 才引入的），纯占宽度；备份时间改由首列直接呈现。
+        tree = ttk.Treeview(wrap, columns=("pick", "what"),
+                            show="tree headings", height=12)
+        tree.heading("#0", text=t("备份 / 位置"))
         tree.heading("pick", text=t("选择"))
         tree.heading("what", text=t("版本"))
-        tree.heading("when", text=t("时间"))
-        tree.column("#0", width=352, minwidth=240, anchor="w", stretch=True)
-        tree.column("pick", width=52, minwidth=48, anchor="center")
-        tree.column("what", width=176, minwidth=150, anchor="w")
-        tree.column("when", width=140, minwidth=118, anchor="w")
+        tree.column("#0", width=560, minwidth=300, anchor="w", stretch=True)
+        tree.column("pick", width=56, minwidth=52, anchor="center")
+        tree.column("what", width=210, minwidth=170, anchor="w")
         sb = ttk.Scrollbar(wrap, orient="vertical", command=tree.yview)
         tree.configure(yscrollcommand=sb.set)
         tree.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
+
+        def _fmt_stamp(stamp: str) -> str:
+            """把 20260924-141010 变成 2026-09-24 14:10:10。"""
+            x = str(stamp or "")
+            if len(x) >= 15 and x[8] == "-":
+                return "{}-{}-{} {}:{}:{}".format(
+                    x[0:4], x[4:6], x[6:8], x[9:11], x[11:13], x[13:15])
+            return x or t("（无时间）")
 
         groups = (("source", t("源码检出")), ("npm", t("npm 全局")),
                   ("profile", t("运行时 profile")))
         self._rb_items = {}
         for key, label in groups:
             items = targets.get(key) or []
-            parent = tree.insert("", "end", text="{} ({})".format(label, len(items)),
-                                 open=True, values=("", "", ""))
+            # 路径只在类别行出现一次（同一目标的 8 个备份路径完全相同）
+            where = ""
+            if items:
+                where = str(items[0].get("target") or "")
+            head = "{} ({})".format(label, len(items))
+            if where:
+                head += "  ·  " + where
+            parent = tree.insert("", "end", text=head, open=True,
+                                 values=("", "", ""))
             if not items:
                 tip = (t("本工具不单独更新它（由源码 / CLI 安装提供），因此没有可回滚的记录。")
                        if key == "profile" else t("没有可回滚的记录。"))
@@ -997,12 +1017,11 @@ class UpdaterApp:
                 self._rb_items[rid] = dict(it, type=key)
                 if key == "source":
                     desc = t("回到 {p1}", p1=it.get("from_version") or t("备份版本"))
-                    sub = it.get("target", "")
+                    sub = _fmt_stamp(it.get("stamp", ""))
                 else:
                     desc = t("回到 {p1}", p1=it.get("version", ""))
-                    sub = it.get("target", "")
-                tree.insert(parent, "end", iid=rid, text=sub,
-                            values=("☐", desc, (it.get("at") or "")[:19]))
+                    sub = (it.get("at") or "")[:19] or t("（无时间）")
+                tree.insert(parent, "end", iid=rid, text=sub, values=("☐", desc))
 
         picked = set()
 

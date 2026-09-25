@@ -305,3 +305,8 @@ from i18n_inv import TABLES_INV as _INV
 
 for _lang, _tbl in _INV.items():
     TABLES.setdefault(_lang, {}).update(_tbl)
+
+from i18n_rb2 import TABLES_RB2 as _RB2
+
+for _lang, _tbl in _RB2.items():
+    TABLES.setdefault(_lang, {}).update(_tbl)
