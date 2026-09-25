@@ -185,8 +185,8 @@ class UpdaterApp:
         root.title(f"{t(APP_TITLE)} v{APP_VERSION}")
         # 高度按实际内容取：底部状态栏（含版本号）与日志区都要放得下，
         # 否则 pack 会把排在后面的部件完全挤掉（见 _build_ui 里的说明）。
-        root.geometry("1020x700")
-        root.minsize(860, 660)
+        root.geometry("1120x720")
+        root.minsize(940, 660)
 
         font = ("Microsoft YaHei UI", 10)
         import tkinter.font as tkfont
@@ -393,9 +393,17 @@ class UpdaterApp:
         self.tree = ttk.Treeview(mid, columns=cols, show="headings", height=5)
         for c in cols:
             self.tree.heading(c, text=heads[c])
-        widths = {"kind": 112, "path": 372, "version": 100, "nature": 92, "ref": 112, "status": 96}
+        # 宽度按字体实测需要定：类型列要装下「运行时 profile (headless)」，
+        # 状态列要装下「官方版本获取失败」，位置列要装下完整路径。
+        widths = {"kind": 166, "path": 348, "version": 92, "nature": 96,
+                  "ref": 124, "status": 152}
+        minws = {"kind": 150, "path": 296, "version": 84, "nature": 90,
+                 "ref": 114, "status": 124}
         for c in cols:
-            self.tree.column(c, width=widths[c], anchor="w", stretch=(c == "path"))
+            # 位置与状态都参与伸缩。原先只让「位置」伸缩，它会吃掉全部多余
+            # 宽度，而「状态」被挤到装不下文案 —— 显示成截断。
+            self.tree.column(c, width=widths[c], minwidth=minws[c],
+                             anchor="w", stretch=(c in ("path", "status")))
         vsb = ttk.Scrollbar(mid, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=vsb.set)
         self.tree.pack(side="left", fill="both", expand=True, padx=(6, 0), pady=6)
@@ -480,7 +488,7 @@ class UpdaterApp:
         inner.pack(fill="x", padx=6, pady=6)
         self.prog = ttk.Progressbar(inner, mode="determinate", maximum=1000)
         self.prog.pack(side="left", fill="x", expand=True)
-        self.lbl_progress = ttk.Label(inner, text=t("等待任务…"), width=60, anchor="e")
+        self.lbl_progress = ttk.Label(inner, text=t("等待任务…"), width=44, anchor="e")
         self.lbl_progress.pack(side="right", padx=(10, 0))
 
         # ── 日志区 ──
@@ -642,6 +650,8 @@ class UpdaterApp:
             assess = inst.get("assess") or {}
             if assess.get("reason") and assess.get("grade") != "stable":
                 self._log(t("    └ 稳定性判定：{p1}", p1=assess['reason']))
+        # 列表高度跟随实际条目数：装几条就显示几行，避免下方留出大片空白
+        self.tree.configure(height=max(3, min(len(self.install_rows), 8)))
         # —— 自检结果 ——
         sc = result.get("selfcheck") or {}
         if sc.get("duplicates"):
@@ -948,7 +958,7 @@ class UpdaterApp:
         win = tk.Toplevel(self.root)
         self._rb_win = win
         win.title(t("回滚到之前的版本"))
-        win.geometry("780x540")
+        win.geometry("880x560")
         win.transient(self.root)
 
         ttk.Label(win, text=t("勾选要回滚的项（可多选，跨类别也可以一起选），再点「回滚所选」。"),
@@ -962,10 +972,10 @@ class UpdaterApp:
         tree.heading("pick", text=t("选择"))
         tree.heading("what", text=t("版本"))
         tree.heading("when", text=t("时间"))
-        tree.column("#0", width=280, anchor="w")
-        tree.column("pick", width=48, anchor="center")
-        tree.column("what", width=210, anchor="w")
-        tree.column("when", width=150, anchor="w")
+        tree.column("#0", width=352, minwidth=240, anchor="w", stretch=True)
+        tree.column("pick", width=52, minwidth=48, anchor="center")
+        tree.column("what", width=176, minwidth=150, anchor="w")
+        tree.column("when", width=140, minwidth=118, anchor="w")
         sb = ttk.Scrollbar(wrap, orient="vertical", command=tree.yview)
         tree.configure(yscrollcommand=sb.set)
         tree.pack(side="left", fill="both", expand=True)
