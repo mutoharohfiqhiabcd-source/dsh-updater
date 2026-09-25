@@ -533,6 +533,22 @@ def fetch_self_latest(current_version: str = "") -> dict:
 # ---------------------------------------------------------------------------
 # 源码检出检测
 # ---------------------------------------------------------------------------
+def _looks_like_checkout_dir(path: Path) -> bool:
+    """判断目录是否为 DSH 源码检出，**不排除** .dsh-bak-* 备份目录。
+
+    回滚时需要校验的恰恰是备份目录的内容，因此不能用 _is_source_checkout
+    （它以排除备份目录为职责）。
+    """
+    pkg = Path(path) / "package.json"
+    if not pkg.is_file():
+        return False
+    try:
+        data = json.loads(pkg.read_text(encoding="utf-8", errors="replace"))
+    except Exception:  # noqa: BLE001
+        return False
+    return data.get("name") == "@deepseek-ai/dsh-root"
+
+
 def _is_source_checkout(path: Path) -> bool:
     """判定目录是否为 DSH 源码检出根：package.json name == @deepseek-ai/dsh-root。
     自动排除本工具生成的备份目录（*.dsh-bak-*）。"""
@@ -1625,6 +1641,181 @@ def close_dsh(port: int = 3080, log=print) -> dict:
             "closed": closed, "errors": errors}
 
 
+# ---------------------------------------------------------------------------
+# 更新历史与回滚
+# ---------------------------------------------------------------------------
+HISTORY_LIMIT = 50
+
+
+def load_history() -> list:
+    """读取更新历史（最新在前）；结构不对时返回空列表。"""
+    data = read_preferences().get("history")
+    if not isinstance(data, list):
+        return []
+    return [x for x in data if isinstance(x, dict)]
+
+
+def append_history(entry: dict) -> bool:
+    """追加一条更新历史（最新在前，超出上限则丢弃最旧的）。"""
+    if not isinstance(entry, dict) or not entry.get("kind"):
+        return False
+    prefs = read_preferences()
+    hist = prefs.get("history")
+    if not isinstance(hist, list):
+        hist = []
+    item = dict(entry)
+    item.setdefault("at", datetime.datetime.now().isoformat(timespec="seconds"))
+    hist.insert(0, item)
+    prefs["history"] = hist[:HISTORY_LIMIT]
+    return write_preferences(prefs)
+
+
+def list_source_backups(target_dir: Path) -> list:
+    """列出某个源码检出旁边的备份目录（最新在前）。
+
+    形如 <目标名>.dsh-bak-YYYYMMDD-HHMMSS，按名字倒序即时间倒序。
+    """
+    target_dir = Path(target_dir)
+    parent = target_dir.parent
+    prefix = target_dir.name + ".dsh-bak-"
+    try:
+        found = [p for p in parent.iterdir() if p.is_dir() and p.name.startswith(prefix)]
+    except Exception:  # noqa: BLE001
+        return []
+    out = []
+    for p in sorted(found, reverse=True):
+        out.append({"backup": str(p), "stamp": p.name[len(prefix):],
+                    "version": _read_dir_version(p)})
+    return out
+
+
+def rollback_source(target_dir: Path, backup_dir: Path, log=print) -> dict:
+    """把源码检出回滚到指定备份。
+
+    先把当前目录整体改名存成一份新备份（避免回滚本身不可逆），再放入备份。
+    返回 {"ok", "restored_from", "saved_current"}。
+    """
+    target_dir, backup_dir = Path(target_dir), Path(backup_dir)
+    if not target_dir.is_dir():
+        raise RuntimeError(t("目标目录不存在：{p1}", p1=target_dir))
+    if not backup_dir.is_dir():
+        raise RuntimeError(t("备份目录不存在：{p1}", p1=backup_dir))
+    if not _looks_like_checkout_dir(backup_dir):
+        raise RuntimeError(t("该备份不是有效的 DeepSeek Harness 源码检出：{p1}", p1=backup_dir))
+
+    ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    saved = target_dir.parent / f"{target_dir.name}.dsh-bak-{ts}"
+    log(t("先把当前目录存为备份 → {p1}", p1=saved))
+    shutil.move(str(target_dir), str(saved))
+    try:
+        log(t("从备份恢复 → {p1}", p1=target_dir))
+        shutil.move(str(backup_dir), str(target_dir))
+    except Exception as e:  # noqa: BLE001
+        log(t("恢复失败，正在还原当前目录：{e}", e=e))
+        if target_dir.exists():
+            shutil.rmtree(target_dir, ignore_errors=True)
+        shutil.move(str(saved), str(target_dir))
+        raise RuntimeError(t("回滚失败，已还原：{e}", e=e)) from e
+    ver = _read_dir_version(target_dir)
+    log(t("回滚完成，当前版本：{p1}", p1=ver or t("未知")))
+    return {"ok": True, "restored_from": str(backup_dir), "saved_current": str(saved),
+            "version": ver}
+
+
+def rollback_npm(version: str, log=print) -> dict:
+    """把 npm 全局安装回滚到指定版本。没有目录级备份，只能重装旧版本。"""
+    v = str(version or "").strip()
+    if not v:
+        raise RuntimeError(t("没有可用的旧版本号，无法回滚。"))
+    npm = shutil.which("npm") or shutil.which("npm.cmd")
+    if not npm:
+        raise RuntimeError(t("未找到 npm，无法回滚。"))
+    if _is_port_open(3080):
+        raise RuntimeError(t("检测到 DeepSeek Harness 正在运行（http://127.0.0.1:3080 被占用）。"
+                            "回滚会替换正在使用的原生模块，请先关闭 DeepSeek Harness。"))
+    log(t("执行：npm install -g @deepseek-ai/dsh@{p1}", p1=v))
+    proc = subprocess.Popen(
+        [npm, "install", "-g", f"@deepseek-ai/dsh@{v}"],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        encoding="utf-8", errors="replace",
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        line = line.rstrip()
+        if line:
+            log(line)
+    code = proc.wait()
+    if code != 0:
+        raise RuntimeError(t("npm 回滚失败（退出码 {p1}）。", p1=code))
+    return {"ok": True, "version": v}
+
+
+def rollback_targets(installs: list | None = None) -> dict:
+    """汇总三类安装各自的可回滚项，供界面展示。
+
+    返回 {"source": [...], "npm": [...], "profile": [...]}，每项含可读描述与
+    执行回滚所需的信息。
+    """
+    hist = load_history()
+    out = {"source": [], "npm": [], "profile": []}
+    # 未传 installs 时自行扫盘：这样用户**之前已有的备份**也能列出来，
+    # 不依赖历史记录（历史是本次版本才引入的）
+    if installs is None:
+        try:
+            installs = [{"kind": INSTALL_KIND_SOURCE, "path": str(p), "version": v}
+                        for p, _k, v in find_source_checkouts()]
+        except Exception:  # noqa: BLE001
+            installs = []
+
+    # 源码：既看历史，也直接扫盘上的备份（历史可能被清过）
+    seen = set()
+    for h in hist:
+        if h.get("kind") != "source":
+            continue
+        path = str(h.get("path") or "")
+        if path and path not in seen:
+            seen.add(path)
+            for b in list_source_backups(Path(path)):
+                out["source"].append({
+                    "target": path, "backup": b["backup"], "stamp": b["stamp"],
+                    "from_version": h.get("old_version") or b.get("version") or "",
+                    "to_version": h.get("new_version", ""),
+                    "at": h.get("at", ""),
+                })
+    if installs:
+        for inst in installs:
+            if inst.get("kind") != INSTALL_KIND_SOURCE:
+                continue
+            path = str(inst.get("path") or "")
+            if path and path not in seen:
+                seen.add(path)
+                for b in list_source_backups(Path(path)):
+                    out["source"].append({
+                        "target": path, "backup": b["backup"], "stamp": b["stamp"],
+                        "from_version": b.get("version") or "",
+                        "to_version": inst.get("version", ""),
+                        "at": "",
+                    })
+
+    for h in hist:
+        if h.get("kind") == "npm" and h.get("old_version"):
+            out["npm"].append({
+                "target": h.get("path", ""), "version": h["old_version"],
+                "from_version": h.get("new_version", ""),
+                "to_version": h.get("old_version", ""),
+                "at": h.get("at", ""),
+            })
+        elif h.get("kind") == "profile" and h.get("old_version"):
+            out["profile"].append({
+                "target": h.get("path", ""), "version": h["old_version"],
+                "from_version": h.get("new_version", ""),
+                "to_version": h.get("old_version", ""),
+                "at": h.get("at", ""),
+            })
+    return out
+
+
 def update_source_from_zip(
     target_dir: Path,
     run_pnpm_install: bool = False,
@@ -1729,6 +1920,9 @@ def update_source_from_zip(
             _run_pnpm_step(target_dir, ["run", "build"], log, "pnpm run build")
 
         msg = t("更新完成：{p1} → {new_version}", p1=old_version or t('旧版本'), new_version=new_version)
+        append_history({"kind": "source", "path": str(target_dir),
+                        "old_version": old_version, "new_version": new_version,
+                        "backup": str(backup_dir)})
         if rebuild_hint:
             msg = msg + "\n\n" + rebuild_hint
         if not keep_backup:
@@ -1789,6 +1983,7 @@ def update_npm_global(pkg_dir: Path, log=print) -> dict:
     _nodes = running_node_count()
     if _nodes:
         log(t("提示：检测到 {p1} 个 node 进程。若它们正在使用 dsh，npm 可能因文件占用而失败；建议先全部关闭。", p1=_nodes))
+    old_ver = _read_dir_version(pkg_dir)
     log(t("执行：npm install -g @deepseek-ai/dsh@latest"))
     proc = subprocess.Popen(
         [npm, "install", "-g", "@deepseek-ai/dsh@latest"],
@@ -1810,6 +2005,8 @@ def update_npm_global(pkg_dir: Path, log=print) -> dict:
         raise RuntimeError(t("npm install -g 失败（退出码 {code}）", code=code))
     # 重新读版本
     ver = _read_dir_version(pkg_dir)
+    append_history({"kind": "npm", "path": str(pkg_dir),
+                    "old_version": old_ver, "new_version": ver})
     return {"ok": True, "new_version": ver, "message": t("npm 全局更新完成，版本：{p1}", p1=ver or '?')}
 
 
@@ -1846,6 +2043,9 @@ def read_preferences() -> dict:
         for key in ("settings", "cache", "sources"):
             if isinstance(data.get(key), dict):
                 out[key] = data[key]
+        # 更新历史是列表，单独处理；漏掉它会导致写入的历史被静默丢弃
+        if isinstance(data.get("history"), list):
+            out["history"] = data["history"]
         if isinstance(data.get("schema"), int):
             out["schema"] = data["schema"]
         return out

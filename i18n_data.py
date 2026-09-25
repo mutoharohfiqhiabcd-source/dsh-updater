@@ -295,3 +295,8 @@ from i18n_close import TABLES_CLOSE as _CLOSE
 
 for _lang, _tbl in _CLOSE.items():
     TABLES.setdefault(_lang, {}).update(_tbl)
+
+from i18n_rollback import TABLES_ROLLBACK as _RB
+
+for _lang, _tbl in _RB.items():
+    TABLES.setdefault(_lang, {}).update(_tbl)

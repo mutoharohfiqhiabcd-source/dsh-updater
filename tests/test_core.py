@@ -851,3 +851,78 @@ def test_update_paths_go_through_auto_close():
     src = (REPO_ROOT / "updater_gui.pyw").read_text(encoding="utf-8")
     assert "def _ensure_dsh_closed" in src
     assert src.count("if not self._ensure_dsh_closed(") >= 2, "应接入源码与 npm 两条路径"
+
+
+# ---------------------------------------------------------------------------
+# 更新历史与回滚
+# ---------------------------------------------------------------------------
+def _fake_checkout(root, version):
+    d = Path(root) / "deepseek-harness-master"
+    (d / "apps" / "cli").mkdir(parents=True, exist_ok=True)
+    (d / "package.json").write_text(
+        json.dumps({"name": "@deepseek-ai/dsh-root", "version": version}), encoding="utf-8")
+    return d
+
+
+def test_history_roundtrip(tmp_path, monkeypatch):
+    monkeypatch.setenv("DSH_UPDATER_SETTINGS_DIR", str(tmp_path))
+    assert core.load_history() == []
+    assert core.append_history({"kind": "npm", "old_version": "1.0", "new_version": "2.0"})
+    h = core.load_history()
+    assert len(h) == 1 and h[0]["old_version"] == "1.0"
+    assert h[0]["at"], "应自动补上时间"
+
+
+def test_history_rejects_bad_entry(tmp_path, monkeypatch):
+    monkeypatch.setenv("DSH_UPDATER_SETTINGS_DIR", str(tmp_path))
+    assert core.append_history({}) is False       # 没有 kind
+    assert core.append_history("不是一个 dict") is False
+
+
+def test_list_source_backups_newest_first(tmp_path):
+    target = _fake_checkout(tmp_path, "2.0")
+    for stamp in ("20260101-000000", "20260202-000000"):
+        (tmp_path / (target.name + ".dsh-bak-" + stamp)).mkdir()
+    got = core.list_source_backups(target)
+    assert [g["stamp"] for g in got] == ["20260202-000000", "20260101-000000"]
+
+
+def test_rollback_source_swaps_directories(tmp_path):
+    """回滚后：当前目录=旧版本，回滚前的状态被另存为新备份（回滚本身可逆）。"""
+    target = _fake_checkout(tmp_path, "2.0")
+    backup = tmp_path / (target.name + ".dsh-bak-20260101-000000")
+    backup.mkdir()
+    (backup / "package.json").write_text(
+        json.dumps({"name": "@deepseek-ai/dsh-root", "version": "1.0"}), encoding="utf-8")
+
+    res = core.rollback_source(target, backup, log=lambda *a: None)
+    assert res["ok"] and res["version"] == "1.0"
+    now = json.loads((target / "package.json").read_text(encoding="utf-8"))["version"]
+    assert now == "1.0"
+    saved = Path(res["saved_current"])
+    assert saved.is_dir()
+    assert json.loads((saved / "package.json").read_text(encoding="utf-8"))["version"] == "2.0"
+
+
+def test_rollback_source_rejects_invalid_backup(tmp_path):
+    target = _fake_checkout(tmp_path, "2.0")
+    bad = tmp_path / (target.name + ".dsh-bak-坏备份")
+    bad.mkdir()                                    # 空目录，不是有效检出
+    with pytest.raises(RuntimeError):
+        core.rollback_source(target, bad, log=lambda *a: None)
+    assert (target / "package.json").is_file(), "失败时不能动到当前目录"
+
+
+def test_rollback_targets_aggregates_three_kinds(tmp_path, monkeypatch):
+    monkeypatch.setenv("DSH_UPDATER_SETTINGS_DIR", str(tmp_path))
+    target = _fake_checkout(tmp_path, "2.0")
+    (tmp_path / (target.name + ".dsh-bak-20260101-000000")).mkdir()
+    # 固定扫描结果：否则会把开发机上真实的检出与备份算进来（环境依赖）
+    monkeypatch.setattr(core, "find_source_checkouts", lambda *a, **k: [])
+    core.append_history({"kind": "source", "path": str(target),
+                         "old_version": "1.0", "new_version": "2.0"})
+    core.append_history({"kind": "npm", "old_version": "0.9", "new_version": "1.0"})
+    t = core.rollback_targets()
+    assert len(t["source"]) == 1 and t["source"][0]["from_version"] == "1.0"
+    assert len(t["npm"]) == 1 and t["npm"][0]["version"] == "0.9"
+    assert t["profile"] == [], "未更新过 profile 时应为空"

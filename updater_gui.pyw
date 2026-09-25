@@ -423,6 +423,8 @@ class UpdaterApp:
         self.btn_plugins = ttk.Button(btns, text=t("🧩 插件检测"), command=self.open_plugins)
         self.btn_plugins.pack(side="left", padx=(0, 8))
         self.btn_skills = ttk.Button(btns, text=t("📚 技能检测"), command=self.open_skills)
+        self.btn_rollback = ttk.Button(btns, text=t("↩ 回滚"), command=self.open_rollback)
+        self.btn_rollback.pack(side="left", padx=(0, 8))
         self.btn_skills.pack(side="left", padx=(0, 8))
         self.btn_refresh = ttk.Button(btns, text=t("🔄 重新检测"), command=self.refresh_all)
         self.btn_refresh.pack(side="left")
@@ -855,6 +857,19 @@ class UpdaterApp:
         except tk.TclError:
             pass
 
+    def _on_rollback_done(self, result, err):
+        self._set_busy(False)
+        if err is not None:
+            messagebox.showerror(t(APP_TITLE), t("回滚失败：\n{err}", err=err))
+            self._set_status(t("回滚失败"))
+            self._prog_reset(t("回滚失败"))
+            return
+        messagebox.showinfo(t(APP_TITLE),
+                            t("回滚完成，共 {p1} 项。\n列表将刷新为当前状态。", p1=result))
+        self._set_status(t("回滚完成"))
+        self._prog_done(t("回滚完成"))
+        self.refresh_all()
+
     def _on_source_update_done(self, result, err):
         self._set_busy(False)
         if err is not None:
@@ -917,6 +932,126 @@ class UpdaterApp:
             update_fn=core.update_skills_git,
             update_label=t("⬇ git 同步更新"),
         )
+
+    def open_rollback(self):
+        """回滚窗口：三类安装各自的可回滚项，可单独选也可以一起选。"""
+        if getattr(self, "_rb_win", None) is not None and self._rb_win.winfo_exists():
+            self._rb_win.lift()
+            self._rb_win.focus_force()
+            return
+        try:
+            targets = core.rollback_targets()
+        except Exception as e:  # noqa: BLE001
+            messagebox.showerror(APP_TITLE, t("读取可回滚项失败：{e}", e=e))
+            return
+
+        win = tk.Toplevel(self.root)
+        self._rb_win = win
+        win.title(t("回滚到之前的版本"))
+        win.geometry("780x540")
+        win.transient(self.root)
+
+        ttk.Label(win, text=t("勾选要回滚的项（可多选，跨类别也可以一起选），再点「回滚所选」。"),
+                  style="Hint.TLabel").pack(anchor="w", padx=12, pady=(10, 6))
+
+        wrap = ttk.Frame(win)
+        wrap.pack(fill="both", expand=True, padx=12)
+        tree = ttk.Treeview(wrap, columns=("pick", "what", "when"),
+                            show="tree headings", height=15)
+        tree.heading("#0", text=t("类别 / 位置"))
+        tree.heading("pick", text=t("选择"))
+        tree.heading("what", text=t("版本"))
+        tree.heading("when", text=t("时间"))
+        tree.column("#0", width=280, anchor="w")
+        tree.column("pick", width=48, anchor="center")
+        tree.column("what", width=210, anchor="w")
+        tree.column("when", width=150, anchor="w")
+        sb = ttk.Scrollbar(wrap, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=sb.set)
+        tree.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+
+        groups = (("source", t("源码检出")), ("npm", t("npm 全局")),
+                  ("profile", t("运行时 profile")))
+        self._rb_items = {}
+        for key, label in groups:
+            items = targets.get(key) or []
+            parent = tree.insert("", "end", text="{} ({})".format(label, len(items)),
+                                 open=True, values=("", "", ""))
+            if not items:
+                tip = (t("本工具不单独更新它（由源码 / CLI 安装提供），因此没有可回滚的记录。")
+                       if key == "profile" else t("没有可回滚的记录。"))
+                tree.insert(parent, "end", text=t("（无）"), values=("", tip, ""))
+                continue
+            for idx, it in enumerate(items):
+                rid = "{}#{}".format(key, idx)
+                self._rb_items[rid] = dict(it, type=key)
+                if key == "source":
+                    desc = t("回到 {p1}", p1=it.get("from_version") or t("备份版本"))
+                    sub = it.get("target", "")
+                else:
+                    desc = t("回到 {p1}", p1=it.get("version", ""))
+                    sub = it.get("target", "")
+                tree.insert(parent, "end", iid=rid, text=sub,
+                            values=("☐", desc, (it.get("at") or "")[:19]))
+
+        picked = set()
+
+        def on_click(event):
+            rid = tree.identify_row(event.y)
+            if not rid or rid not in self._rb_items:
+                return
+            picked.symmetric_difference_update({rid})
+            tree.set(rid, "pick", "☑" if rid in picked else "☐")
+
+        tree.bind("<Button-1>", on_click)
+
+        def do_rollback():
+            if not picked:
+                messagebox.showinfo(APP_TITLE, t("请先勾选要回滚的项。"))
+                return
+            lines = []
+            for rid in sorted(picked):
+                it = self._rb_items[rid]
+                lines.append("  • {} → {}".format(
+                    it.get("target", ""), it.get("version") or it.get("from_version") or ""))
+            if not messagebox.askyesno(
+                    APP_TITLE,
+                    t("将回滚以下 {p1} 项：", p1=len(picked)) + chr(10) + chr(10) +
+                    chr(10).join(lines) + chr(10) + chr(10) +
+                    t("源码回滚会替换目录（当前状态会另存为一份新备份）；"
+                      "npm 回滚会重装旧版本。是否继续？")):
+                return
+            if not self._ensure_dsh_closed(t("回滚")):
+                return
+            win.destroy()
+            self._set_busy(True)
+            self._set_status(t("正在回滚…"))
+            worker = Worker(self._log, self._on_rollback_done,
+                            on_progress=self._on_update_progress)
+            self._worker = worker
+
+            def job():
+                done = 0
+                for rid in sorted(picked):
+                    it = self._rb_items[rid]
+                    if it["type"] == "source":
+                        core.rollback_source(Path(it["target"]), Path(it["backup"]),
+                                             log=worker.emit_log)
+                    elif it["type"] == "npm":
+                        core.rollback_npm(it.get("version", ""), log=worker.emit_log)
+                    done += 1
+                    worker.emit_progress(done / max(1, len(picked)))
+                return done
+
+            worker.start(job)
+            self._poll(worker)
+
+        bar = ttk.Frame(win)
+        bar.pack(fill="x", padx=12, pady=10)
+        ttk.Button(bar, text=t("↩ 回滚所选"), style="Accent.TButton",
+                   command=do_rollback).pack(side="left")
+        ttk.Button(bar, text=t("关闭"), command=win.destroy).pack(side="right")
 
     def _open_item_source(self, tree, kind: str) -> None:
         """打开所选插件/技能的下载来源，并记住它以便日后据此检测更新。
