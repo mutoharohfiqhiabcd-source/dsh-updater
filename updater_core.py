@@ -1532,6 +1532,99 @@ def _run_pnpm_step(target_dir: Path, args: list, log, what: str) -> None:
             t("{p1} 失败（退出码 {p2}）。源码已替换，请手动排查。", p1=what, p2=code))
 
 
+# ---------------------------------------------------------------------------
+# 关闭正在运行的 DSH（更新前自动处理）
+# ---------------------------------------------------------------------------
+def processes_on_port(port: int = 3080) -> list:
+    """返回监听指定端口的进程 [{"pid": int, "name": str}]。
+
+    Windows 用 netstat -ano 取 PID 再查 tasklist 取进程名；其它平台用 lsof。
+    取不到时返回空列表，绝不抛异常。
+    """
+    pids: list = []
+    try:
+        if os.name == "nt":
+            r = subprocess.run(["netstat", "-ano"], capture_output=True, text=True,
+                               timeout=20,
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            for line in (r.stdout or "").splitlines():
+                parts = line.split()
+                if len(parts) >= 4 and f":{port}" in parts[1] and parts[3].upper() == "LISTENING":
+                    if parts[-1].isdigit():
+                        pids.append(int(parts[-1]))
+        else:
+            r = subprocess.run(["lsof", "-t", f"-i:{port}"], capture_output=True,
+                               text=True, timeout=20)
+            for line in (r.stdout or "").splitlines():
+                if line.strip().isdigit():
+                    pids.append(int(line.strip()))
+    except Exception:  # noqa: BLE001
+        return []
+
+    out = []
+    for pid in dict.fromkeys(pids):          # 去重且保序
+        name = ""
+        try:
+            if os.name == "nt":
+                r = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+                                   capture_output=True, text=True, timeout=15,
+                                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                first = (r.stdout or "").strip().splitlines()
+                if first:
+                    name = first[0].split()[0]
+            else:
+                r = subprocess.run(["ps", "-p", str(pid), "-o", "comm="],
+                                   capture_output=True, text=True, timeout=15)
+                name = (r.stdout or "").strip()
+        except Exception:  # noqa: BLE001
+            pass
+        out.append({"pid": pid, "name": name or "?"})
+    return out
+
+
+def close_dsh(port: int = 3080, log=print) -> dict:
+    """结束占用指定端口的进程（连同其子进程）。
+
+    返回 {"ok": bool, "closed": [...], "errors": [...]}；任何失败都只记录不抛异常，
+    由调用方决定是否继续。
+    """
+    procs = processes_on_port(port)
+    closed, errors = [], []
+    if not procs:
+        log(t("未发现占用 {p1} 端口的进程。", p1=port))
+        return {"ok": True, "closed": closed, "errors": errors}
+
+    for p in procs:
+        pid = p["pid"]
+        try:
+            if os.name == "nt":
+                r = subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                                   capture_output=True, text=True, timeout=30,
+                                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            else:
+                r = subprocess.run(["kill", "-9", str(pid)], capture_output=True,
+                                   text=True, timeout=30)
+            if r.returncode == 0:
+                closed.append(p)
+                log(t("已关闭进程 {p1}（{p2}）。", p1=pid, p2=p["name"]))
+            else:
+                msg = (r.stderr or r.stdout or "").strip()[:120]
+                errors.append({"pid": pid, "error": msg or "taskkill 返回非 0"})
+                log(t("无法关闭进程 {p1}：{p2}", p1=pid, p2=msg or "taskkill 返回非 0"))
+        except Exception as e:  # noqa: BLE001
+            errors.append({"pid": pid, "error": str(e)[:120]})
+            log(t("无法关闭进程 {p1}：{p2}", p1=pid, p2=str(e)[:120]))
+
+    # 给系统一点时间释放端口
+    if closed:
+        for _ in range(20):
+            if not _is_port_open(port):
+                break
+            time.sleep(0.25)
+    return {"ok": not errors and not _is_port_open(port),
+            "closed": closed, "errors": errors}
+
+
 def update_source_from_zip(
     target_dir: Path,
     run_pnpm_install: bool = False,

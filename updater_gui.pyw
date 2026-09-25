@@ -714,6 +714,8 @@ class UpdaterApp:
             t("将更新 npm 全局安装：\n{p1}\n当前版本：{p2}\n将执行：npm install -g @deepseek-ai/dsh@latest\n\n是否继续？", p1=inst['path'], p2=inst['version'] or '—'),
         ):
             return
+        if not self._ensure_dsh_closed(t("更新 npm 全局安装")):
+            return
         self._set_busy(True)
         self._set_status(t("正在通过 npm 更新全局安装…"))
         self._prog_reset("npm install -g @deepseek-ai/dsh@latest")
@@ -797,9 +799,36 @@ class UpdaterApp:
         ttk.Button(btns, text=t("开始更新"), command=lambda: self._run_source_update(inst, ask)).pack(side="left", padx=4)
         ttk.Button(btns, text=t("取消"), command=ask.destroy).pack(side="left")
 
+    def _ensure_dsh_closed(self, purpose: str) -> bool:
+        """更新前确保 DSH 已关闭：占用 3080 时询问用户并自动结束进程。
+
+        返回 True 表示可以继续，False 表示用户取消或关闭失败。
+        """
+        if not core._is_port_open(3080):
+            return True
+        procs = core.processes_on_port(3080)
+        desc = chr(10).join("    PID {}  {}".format(p["pid"], p["name"]) for p in procs) \
+            or t("（未能识别进程）")
+        if not messagebox.askyesno(
+                APP_TITLE,
+                t("检测到 DeepSeek Harness 正在运行（占用 3080 端口）：" + chr(10) + "{p1}" +
+                  chr(10) + chr(10) + "是否自动关闭它并继续{p2}？", p1=desc, p2=purpose)):
+            self._log(t("已取消：未关闭正在运行的 DeepSeek Harness，操作已中止。"))
+            return False
+        self._log(t("正在自动关闭正在运行的 DeepSeek Harness…"))
+        res = core.close_dsh(3080, log=self._log)
+        if not res.get("ok"):
+            messagebox.showerror(APP_TITLE,
+                                 t("未能关闭 DeepSeek Harness，请手动关闭后再试。"))
+            return False
+        self._log(t("DeepSeek Harness 已关闭，继续执行。"))
+        return True
+
     def _run_source_update(self, inst, ask):
         ask.destroy()
         if self.busy:
+            return
+        if not self._ensure_dsh_closed(t("更新源码检出")):
             return
         self._set_busy(True)
         self._set_status(t("正在下载并替换源码…"))

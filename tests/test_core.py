@@ -822,3 +822,32 @@ def test_run_pnpm_step_reports_missing_pnpm(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError) as ei:
         core._run_pnpm_step(tmp_path, ["run", "build"], lambda *a: None, "pnpm run build")
     assert "pnpm" in str(ei.value)
+
+
+# ---------------------------------------------------------------------------
+# 更新前自动关闭 DSH
+# ---------------------------------------------------------------------------
+def test_processes_on_port_returns_list():
+    """必须返回列表且不抛异常；空闲端口应为空列表。"""
+    assert isinstance(core.processes_on_port(59999), list)
+    assert core.processes_on_port(59999) == []
+
+
+def test_close_dsh_on_free_port_is_noop():
+    """端口空闲时不应结束任何进程（这里只能测空闲端口，
+    决不能对真实运行的 DSH 调用，否则会打断用户正在用的程序）。"""
+    res = core.close_dsh(59999, log=lambda *a: None)
+    assert res["ok"] is True
+    assert res["closed"] == []
+    assert res["errors"] == []
+
+
+def test_update_paths_go_through_auto_close():
+    """两条更新路径（源码 / npm）都必须先经过自动关闭检查。
+
+    否则 DSH 在运行时点更新会直接失败：源码路径被端口检查拦住、
+    npm 路径则以 EPERM 中断并可能损坏安装。
+    """
+    src = (REPO_ROOT / "updater_gui.pyw").read_text(encoding="utf-8")
+    assert "def _ensure_dsh_closed" in src
+    assert src.count("if not self._ensure_dsh_closed(") >= 2, "应接入源码与 npm 两条路径"
