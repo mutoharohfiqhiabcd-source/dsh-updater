@@ -2088,6 +2088,9 @@ def write_preferences(data: dict) -> bool:
 SETTINGS_DEFAULTS = {
     "gpu_acceleration": False,
     "language": "auto",      # "auto"=跟随系统；否则 zh-CN / zh-TW / en / ja / ko
+    # 注意：load_settings 只接受这里列出的键，新键忘了加就会「写进去读不出来」
+    #（深色模式偏好就踩过这个坑：切换时写得进去，重启后读回来被丢掉）
+    "dark_mode": False,      # 深色主题（切换后记住，下次启动沿用）
 }
 
 

@@ -223,6 +223,9 @@ class UpdaterApp:
                 pass
 
         self.settings = core.load_settings()
+        # 主题跟随上次选择。原先 _dark 恒为 False，切换后也不保存，
+        # 于是每次启动都回到浅色，用户得手动再切一次。
+        self._dark = bool(self.settings.get("dark_mode"))
         i18n.set_language(str(self.settings.get("language") or i18n.AUTO))
         self._setup_style()
         self._build_ui()
@@ -360,6 +363,15 @@ class UpdaterApp:
             self.lbl_github.configure(background=CLR["panel"],
                                       foreground=CLR["accent"])
             self.lbl_npm.configure(background=CLR["panel"])
+        except Exception:  # noqa: BLE001
+            pass
+        # 记住选择：下次启动直接用它
+        try:
+            st = core.load_settings()
+            st["dark_mode"] = bool(self._dark)
+            save = getattr(core, "save_settings", None)
+            if callable(save):
+                save(st)
         except Exception:  # noqa: BLE001
             pass
         self.btn_theme.configure(
@@ -994,24 +1006,56 @@ class UpdaterApp:
         _h = max(340, min(700, 200 + _rows * 30))
         win.geometry(f"940x{_h}")
         win.minsize(760, 320)
+        # 深色模式下把这个窗口整体做成纯黑：它是个独立的小窗口，
+        # 用纯黑与主窗口的深蓝灰区分开，看起来更干净。
+        # 一律用本窗口专用的样式名（Rb.*），不去改全局样式，避免影响主窗口。
+        win_bg = "#000000" if self._dark else CLR["bg"]
+        win.configure(bg=win_bg)
+        s = ttk.Style(win)
+        s.configure("Rb.TFrame", background=win_bg)
+        s.configure("Rb.TLabel", background=win_bg, foreground=CLR["text"])
+        s.configure("Rb.Hint.TLabel", background=win_bg, foreground=CLR["text_dim"])
+        s.configure("Rb.Treeview", background=win_bg, fieldbackground=win_bg,
+                    foreground=CLR["text"], bordercolor=CLR["panel_line"], rowheight=30)
+        s.map("Rb.Treeview", background=[("selected", CLR["tree_sel"])],
+              foreground=[("selected", CLR["text"])])
+        s.configure("Rb.Treeview.Heading", background=CLR["heading_bg"],
+                    foreground=CLR["heading_fg"], padding=(8, 6),
+                    font=("Microsoft YaHei UI", 10, "bold"))
+        s.map("Rb.Treeview.Heading", background=[("active", CLR["heading_bg"])])
+        s.configure("Rb.Vertical.TScrollbar", background=CLR["panel_line"],
+                    troughcolor=win_bg, bordercolor=win_bg, arrowcolor=CLR["text_dim"])
+        # 原生标题栏：Win10 1809+ 支持 DWMWA_USE_IMMERSIVE_DARK_MODE(20)，
+        # Win11 用 38；两个都试一遍，失败就算了（只是外观）。
+        if self._dark:
+            try:
+                import ctypes
+                hwnd = ctypes.windll.user32.GetParent(win.winfo_id())
+                val = ctypes.c_int(1)
+                for attr in (20, 38):
+                    ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                        hwnd, attr, ctypes.byref(val), ctypes.sizeof(val))
+            except Exception:  # noqa: BLE001
+                pass
         win.transient(self.root)
 
         ttk.Label(win, text=t("勾选要回滚的项（可多选，跨类别也可以一起选），再点「回滚所选」。"),
-                  style="Hint.TLabel").pack(anchor="w", padx=12, pady=(10, 6))
+                  style="Rb.Hint.TLabel").pack(anchor="w", padx=12, pady=(10, 6))
 
-        wrap = ttk.Frame(win)
+        wrap = ttk.Frame(win, style="Rb.TFrame")
         wrap.pack(fill="both", expand=True, padx=12)
         # 只有三列：原先的「时间」列在所有旧备份上都是空的（历史记录是本次
         # 才引入的），纯占宽度；备份时间改由首列直接呈现。
         tree = ttk.Treeview(wrap, columns=("pick", "what"),
-                            show="tree headings", height=12)
+                            show="tree headings", height=12, style="Rb.Treeview")
         tree.heading("#0", text=t("备份 / 位置"))
         tree.heading("pick", text=t("选择"))
         tree.heading("what", text=t("版本"))
         tree.column("#0", width=560, minwidth=300, anchor="w", stretch=True)
         tree.column("pick", width=56, minwidth=52, anchor="center")
         tree.column("what", width=210, minwidth=170, anchor="w")
-        sb = ttk.Scrollbar(wrap, orient="vertical", command=tree.yview)
+        sb = ttk.Scrollbar(wrap, orient="vertical", command=tree.yview,
+                           style="Rb.Vertical.TScrollbar")
         tree.configure(yscrollcommand=sb.set)
         tree.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
@@ -1106,7 +1150,7 @@ class UpdaterApp:
             worker.start(job)
             self._poll(worker)
 
-        bar = ttk.Frame(win)
+        bar = ttk.Frame(win, style="Rb.TFrame")
         bar.pack(fill="x", padx=12, pady=10)
         ttk.Button(bar, text=t("↩ 回滚所选"), style="Accent.TButton",
                    command=do_rollback).pack(side="left")
