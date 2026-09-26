@@ -1,6 +1,6 @@
 # DeepSeek Harness 更新器（源码版）——自动更新与 GitHub 同步详细说明
 
-> 适用版本：`dsh-updater` v0.7.6
+> 适用版本：`dsh-updater` v0.7.7
 > 目标程序：`updater_core.py` / `updater_gui.pyw`
 > 说明范围：源码检出（source checkout）的检测、版本对比、自动更新、GitHub 同步与回滚。
 
