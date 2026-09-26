@@ -1,0 +1,134 @@
+# DSH 社媒 MCP 接入配置模板（已按各包源码校正）
+#
+# 用途：让 DSH 能直接发 Twitter/X 与 Facebook。
+#
+# 【校正记录】初版我按常见写法猜了环境变量名（X_API_KEY / X_ACCESS_TOKEN 等），
+# 实测该包读的是别的名字，照猜的填必然连不上。现已从包内源码
+# （node_modules 里 dist/index.js 的 process.env.*）逐一核实。
+#
+# 用前必读：
+#   1. 本文件是**模板**，不要整个覆盖过去
+#   2. 请把下面的条目**追加**到：
+#        C:\Users\y'g'x'z\.dsh\profiles\web\cordis.patch.yml
+#      （cordis.yml 本身只有一行 []，注释写明「Edit cordis.patch.yml」）
+#   3. 改之前先备份那个文件 —— 它现在 522 行，是你所有自定义的集合
+#   4. 密钥填好后**不要提交进任何 git 仓库**
+#
+# 字段依据：packages/mcp/mcp-client/src/index.ts 的 Config 定义
+#   - transport 必填，取值 'stdio' 或 'streamable-http'（**不是** type）
+#   - serverName 必填，格式 [A-Za-z0-9_-]{1,32}，同一时刻不能重名
+#   - 工具会注册成 mcp__<serverName>__<原工具名>
+#   - failOnStartupError 建议显式设 false，否则 MCP 连不上会连带 DSH 启动失败
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 一、Twitter / X —— x-post-mcp（npm 包 1.1.0，MIT，零运行时依赖，仅 8.6KB）
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# 源码核实结果：
+#   工具      send_tweet(text 必填, reply_to_tweet_id?, quote_tweet_id?)
+#   环境变量  X_BEARER_TOKEN            ← README 的配置示例只用这一个
+#             X_CLIENT_ID / X_CLIENT_SECRET / X_REFRESH_TOKEN   ← 代码里另有
+#             一条 OAuth2 刷新流程会用到；不确定就走 Bearer 那条
+#
+# 怎么拿 X_BEARER_TOKEN：
+#   1. https://developer.x.com/en/portal/dashboard
+#   2. 新建 Project 与 App
+#   3. 生成 **User Authentication Token**，scope 勾选：
+#        tweet.read  ·  tweet.write  ·  users.read
+#      （少勾 tweet.write 就只能读不能发）
+#
+- id: mcp-x-post
+  name: "@deepseek-ai/dsh-mcp-client"
+  config:
+    transport: stdio
+    serverName: x-post
+    command: npx
+    args:
+      - "x-post-mcp"
+    env:
+      X_BEARER_TOKEN: "在这里填你的 Bearer Token"
+    toolCallTimeoutMs: 120000
+    failOnStartupError: false
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 二、Facebook 专页发帖 —— facebook-mcp-server（npm 包 1.6.6）
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# ⚠ 注意：以下环境变量名**尚未核实**（该包我还没拉源码看过）。
+#   启用前建议先在终端跑一次 npx -y facebook-mcp-server，
+#   看它报的缺哪个变量名，再照着填。或者告诉我，我去把源码拉下来核实。
+#
+# 密钥来源：https://developers.facebook.com → 建 App（类型选「商业」）
+#          → 添加 Facebook Login → Graph API Explorer 勾选
+#            pages_manage_posts + pages_read_engagement → 选你的专页
+#          → 生成 User Token → 换成长期 Page Token
+# 自己用的话开发模式下就能发，不需要过 App Review
+#
+# - id: mcp-facebook
+#   name: "@deepseek-ai/dsh-mcp-client"
+#   config:
+#     transport: stdio
+#     serverName: fb-page
+#     command: npx
+#     args:
+#       - "-y"
+#       - "facebook-mcp-server"
+#     env:
+#       FACEBOOK_ACCESS_TOKEN: "待核实"
+#       FACEBOOK_PAGE_ID: "待核实"
+#     toolCallTimeoutMs: 120000
+#     failOnStartupError: false
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 三、备选：twitter-mcp（0.1.1）—— 极简，只做发推
+# ═══════════════════════════════════════════════════════════════════════════
+# - id: mcp-twitter-simple
+#   name: "@deepseek-ai/dsh-mcp-client"
+#   config:
+#     transport: stdio
+#     serverName: tw-simple
+#     command: npx
+#     args:
+#       - "twitter-mcp"
+#     env:
+#       # 变量名同样未核实，先跑一次看它要什么
+#       TWITTER_API_KEY: "待核实"
+#     toolCallTimeoutMs: 120000
+#     failOnStartupError: false
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 四、HTTP 形式（若某个 MCP 提供 SSE 端点）
+# ═══════════════════════════════════════════════════════════════════════════
+# - id: mcp-x-post-http
+#   name: "@deepseek-ai/dsh-mcp-client"
+#   config:
+#     transport: streamable-http
+#     serverName: x-post
+#     url: "https://example.com/mcp"
+#     headers:
+#       Authorization: "Bearer 在这里填 token"
+#     toolCallTimeoutMs: 120000
+#     failOnStartupError: false
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 验证步骤
+# ═══════════════════════════════════════════════════════════════════════════
+# 1. 备份：Copy-Item cordis.patch.yml cordis.patch.yml.bak-manual
+# 2. 追加条目到 cordis.patch.yml（YAML 缩进两层空格）
+# 3. 预热（这台机器网络不稳，先手动跑一次避免启动超时）：
+#      npx x-post-mcp
+#    能正常挂起等 stdin 就说明包装好了；报缺 token 也正常
+# 4. 重启 DSH
+# 5. 看启动日志有没有 mcp-client(x-post) 的连接失败
+# 6. 连上后工具名是 mcp__x-post__send_tweet，可以先发一条测试推
+#
+# 常见失败原因
+#   - 变量名写错（x-post-mcp 用的是 X_BEARER_TOKEN，不是 X_API_KEY）
+#   - scope 没勾 tweet.write → 发帖 403
+#   - serverName 重复 → 报 "already in use"
+#   - YAML 缩进错 → DSH 启动时解析报错

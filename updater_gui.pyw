@@ -226,6 +226,11 @@ class UpdaterApp:
         # 主题跟随上次选择。原先 _dark 恒为 False，切换后也不保存，
         # 于是每次启动都回到浅色，用户得手动再切一次。
         self._dark = bool(self.settings.get("dark_mode"))
+        # 关键：CLR 是模块级调色板，模块导入时固定为浅色。只恢复 _dark
+        # 而不重建 CLR，就会出现「标志是深色、界面却是浅色」的错位，
+        # 而且下次点切换会反过来（_dark 变 False 却应用深色）。
+        CLR.clear()
+        CLR.update(THEMES["dark" if self._dark else "light"])
         i18n.set_language(str(self.settings.get("language") or i18n.AUTO))
         self._setup_style()
         self._build_ui()

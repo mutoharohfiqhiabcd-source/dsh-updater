@@ -940,3 +940,18 @@ def test_all_used_ttk_styles_are_defined():
     defined = set(re.findall(r's\.(?:configure|map)\(\s*"([^"]+)"', src))
     missing = sorted(x for x in used if x not in defined)
     assert not missing, "使用了但未定义的 ttk 样式：" + ", ".join(missing)
+
+
+def test_startup_syncs_palette_with_saved_theme():
+    """启动时必须把 CLR 调色板同步成已保存的主题。
+
+    实际踩过的坑：只恢复 _dark 标志、不同步 CLR（模块级调色板导入时固定为
+    浅色），会出现「标志是深色、界面却是浅色」的错位，而且下次点切换还会
+    反过来（_dark 变 False 却应用深色）。这是 v0.7.7 真实存在的问题。
+    """
+    src = (REPO_ROOT / "updater_gui.pyw").read_text(encoding="utf-8")
+    anchor = 'self._dark = bool(self.settings.get("dark_mode"))'
+    assert anchor in src, "找不到恢复主题标志的代码"
+    tail = src[src.index(anchor):src.index(anchor) + 900]
+    assert "CLR.update(THEMES[" in tail, \
+        "恢复 _dark 之后没有同步 CLR —— 会导致标志与配色错位"
