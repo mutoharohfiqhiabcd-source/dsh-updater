@@ -55,6 +55,8 @@ THEMES = {
             "unstable": "#fce4ec",
         },
         "tree_bg": "#ffffff", "tree_sel": "#cfe0f7",
+        "banner_bg": {"ok": "#eef7f0", "warn": "#fff4e6", "err": "#fdeeec"},
+        "btn_pressed": "#c8d2e0",
     },
     "dark": {
         "bg": "#12161c", "panel": "#1b2129", "panel_line": "#2d3742",
@@ -70,6 +72,8 @@ THEMES = {
             "unstable": "#451726",
         },
         "tree_bg": "#171d25", "tree_sel": "#27466e",
+        "banner_bg": {"ok": "#17301f", "warn": "#3a2f16", "err": "#3a1c1c"},
+        "btn_pressed": "#2b3d5e",
     },
 }
 
@@ -268,7 +272,8 @@ class UpdaterApp:
         btn_active = CLR["accent_hover"] if not self._dark else "#2b3d5e"
         s.configure("TButton", background=CLR["panel"], foreground=CLR["text"],
                     bordercolor=CLR["panel_line"], focusthickness=0, padding=(14, 6))
-        s.map("TButton", background=[("active", btn_active), ("pressed", "#c8d2e0")],
+        s.map("TButton", background=[("active", btn_active),
+                                    ("pressed", CLR["btn_pressed"])],
               foreground=[("active", CLR["text"])])
         s.configure("Accent.TButton", background=CLR["accent"], foreground=CLR["accent_fg"],
                     bordercolor=CLR["accent"], padding=(16, 7))
@@ -301,6 +306,28 @@ class UpdaterApp:
         s.configure("Horizontal.TScrollbar", background=CLR["panel_line"], troughcolor=CLR["bg"],
                     bordercolor=CLR["bg"], arrowcolor=CLR["text_dim"])
         s.configure("TCheckbutton", background=CLR["panel"], foreground=CLR["text"])
+
+        # 下拉框（语言选择）。clam 主题不会跟随我们的配色，默认是白底黑字，
+        # 深色模式下会显示成一个空白白框、选中的文字完全看不见，必须显式配。
+        s.configure("TCombobox",
+                    fieldbackground=CLR["panel"], background=CLR["panel"],
+                    foreground=CLR["text"], arrowcolor=CLR["text"],
+                    bordercolor=CLR["panel_line"], lightcolor=CLR["panel"],
+                    darkcolor=CLR["panel"], selectbackground=CLR["tree_sel"],
+                    selectforeground=CLR["text"], padding=(6, 4))
+        s.map("TCombobox",
+              fieldbackground=[("readonly", CLR["panel"]), ("disabled", CLR["bg"])],
+              foreground=[("readonly", CLR["text"]), ("disabled", CLR["text_dim"])],
+              background=[("readonly", CLR["panel"]), ("active", CLR["panel"])],
+              arrowcolor=[("disabled", CLR["text_dim"])])
+        # 展开后的列表是原生 Listbox，ttk 样式管不到，只能用 option 数据库上色
+        try:
+            self.root.option_add("*TCombobox*Listbox.background", CLR["panel"])
+            self.root.option_add("*TCombobox*Listbox.foreground", CLR["text"])
+            self.root.option_add("*TCombobox*Listbox.selectBackground", CLR["tree_sel"])
+            self.root.option_add("*TCombobox*Listbox.selectForeground", CLR["text"])
+        except Exception:  # noqa: BLE001
+            pass
 
         # 状态/性质 tag（行前景 + 行背景）
         row_bg = CLR["row_bg"]
@@ -1262,8 +1289,7 @@ class UpdaterApp:
         def show_banner(text: str, kind: str = "ok"):
             color = {"ok": CLR["ok"], "warn": CLR["warn"], "err": CLR["err"]}[kind]
             banner.configure(text=text, fg=color,
-                             bg={"ok": "#eef7f0", "warn": "#fff4e6",
-                                 "err": "#fdeeec"}[kind])
+                             bg=CLR["banner_bg"].get(kind, CLR["panel"]))
             if not text:
                 banner.configure(text="", bg=CLR["bg"])
 
@@ -1304,7 +1330,7 @@ class UpdaterApp:
             except Exception as e:  # noqa: BLE001 —— 兜底：不允许进度回调打断窗口
                 try:
                     banner.configure(text=t("进度刷新异常（扫描继续）：{e}", e=e),
-                                     fg=CLR["err"], bg="#fdeeec")
+                                     fg=CLR["err"], bg=CLR["banner_bg"]["err"])
                 except tk.TclError:
                     pass
 
