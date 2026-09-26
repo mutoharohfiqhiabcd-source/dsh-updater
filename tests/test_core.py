@@ -926,3 +926,17 @@ def test_rollback_targets_aggregates_three_kinds(tmp_path, monkeypatch):
     assert len(t["source"]) == 1 and t["source"][0]["from_version"] == "1.0"
     assert len(t["npm"]) == 1 and t["npm"][0]["version"] == "0.9"
     assert t["profile"] == [], "未更新过 profile 时应为空"
+
+
+def test_all_used_ttk_styles_are_defined():
+    """所有 style="X" 用到的 ttk 样式，都必须在 _setup_style 里配置过。
+
+    实际踩过的坑：回滚窗口用了 style="Hint.TLabel"，但这个样式从未定义，
+    ttk 拿到未配置的样式名会渲染成一块突兀的黑色背景（深色下尤其明显）。
+    """
+    import re
+    src = (REPO_ROOT / "updater_gui.pyw").read_text(encoding="utf-8")
+    used = set(re.findall(r'style\s*=\s*"([^"]+)"', src))
+    defined = set(re.findall(r's\.(?:configure|map)\(\s*"([^"]+)"', src))
+    missing = sorted(x for x in used if x not in defined)
+    assert not missing, "使用了但未定义的 ttk 样式：" + ", ".join(missing)

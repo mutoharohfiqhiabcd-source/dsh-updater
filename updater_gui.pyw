@@ -267,6 +267,10 @@ class UpdaterApp:
         s.configure("Heading.TLabel", background=CLR["panel"], foreground=CLR["text"],
                     font=("Microsoft YaHei UI", 16, "bold"))
         s.configure("Dim.TLabel", background=CLR["panel"], foreground=CLR["text_dim"])
+        # 提示文案标签：用在窗口底色上（不是面板上），背景必须跟 bg 走。
+        # 该样式曾在回滚窗口里「被使用却未定义」——ttk 拿到未配置的样式名
+        # 会渲染成一块突兀的黑色背景，深色模式下尤其明显。
+        s.configure("Hint.TLabel", background=CLR["bg"], foreground=CLR["text_dim"])
 
         # 按钮
         btn_active = CLR["accent_hover"] if not self._dark else "#2b3d5e"
