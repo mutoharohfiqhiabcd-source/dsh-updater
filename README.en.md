@@ -73,7 +73,8 @@ gives the model a `dsh_updater` tool (`status` / `latest` / `notes` /
 dsh plugin --profile web add github:mutoharohfiqhiabcd-source/dsh-updater
 ```
 
-Restart DSH afterwards — bundle membership is fixed at startup.
+Refresh the DSH page afterwards — the plugin row hot-reloads, so the card and the
+header buttons appear without restarting (restart only if they do not).
 
 ### Three buttons in the session header
 

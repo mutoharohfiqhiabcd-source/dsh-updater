@@ -57,7 +57,8 @@ copy /Y updater_gui.pyw updater_core.py dsh_updater.ico 目标目录\
 dsh plugin --profile web add github:mutoharohfiqhiabcd-source/dsh-updater
 ```
 
-安装后**重启 DSH**（bundle 成员在启动时确定），卡片即可见。
+装好后**刷新一下 DSH 页面**即可看到卡片与按钮（DSH 会热重载插件行；
+若没出现再重启 DSH）。
 
 #### 会话标题栏的三个按钮
 
