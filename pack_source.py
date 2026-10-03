@@ -26,6 +26,11 @@ REPO_ROOT = Path(__file__).resolve().parent
 
 # 随源码版分发的文件（顺序即 zip 内顺序）。
 # 说明文档是必须的——README 里有指向它的链接，缺了就是死链。
+#
+# ⚠️ i18n 模块见 SOURCE_GLOBS：updater_core.py 第 29 行就 `from i18n import t`，
+# updater_gui.pyw 还要按语言加载各语言包。v0.7.7 及更早的源码 zip 只装了下面
+# 列出的 7 个文件、**漏掉了全部 i18n 模块**，用户解压出来第一行就
+# ModuleNotFoundError —— 而「下载 ZIP」正是 README 里的正式安装方式之一。
 SOURCE_FILES = (
     "updater_core.py",
     "updater_gui.pyw",
@@ -36,7 +41,38 @@ SOURCE_FILES = (
     "源码版更新与GitHub同步说明.md",
 )
 
+# 按通配符补充的文件：新增语言包会自动跟随，不会再漏。
+SOURCE_GLOBS = ("i18n*.py",)
+
+# 本仓库同时是一个 DSH 插件包，源码版一并带上这些，解压后「桌面版」和
+# 「DSH 网页插件」两种用法都能直接用。
+PLUGIN_FILES = (
+    "package.json",
+    "cordis.patch.yml",
+    "index.js",
+    "lib/client.js",
+    "icon.png",
+    "locale/en.json",
+    "locale/zh.json",
+)
+
 _APP_VERSION_RE = re.compile(r'^APP_VERSION\s*=\s*"([^"]+)"', re.M)
+
+
+def source_payload(base: Path | None = None) -> list:
+    """源码版 zip 的完整文件清单（保序去重）。"""
+    root = Path(base) if base is not None else REPO_ROOT
+    names = list(SOURCE_FILES)
+    for pattern in SOURCE_GLOBS:
+        names.extend(sorted(str(p.relative_to(root)).replace("\\", "/")
+                            for p in root.glob(pattern) if p.is_file()))
+    names.extend(PLUGIN_FILES)
+    seen, out = set(), []
+    for name in names:
+        if name not in seen:
+            seen.add(name)
+            out.append(name)
+    return out
 
 
 def read_app_version(root: Path | None = None) -> str:
@@ -51,7 +87,8 @@ def read_app_version(root: Path | None = None) -> str:
 def build_source_zip(version: str, outdir: Path, root: Path | None = None) -> Path:
     """生成源码版 zip 并返回产物路径。"""
     base = Path(root) if root is not None else REPO_ROOT
-    missing = [name for name in SOURCE_FILES if not (base / name).is_file()]
+    names = source_payload(base)
+    missing = [name for name in names if not (base / name).is_file()]
     if missing:
         raise FileNotFoundError("缺少待打包文件：" + "、".join(missing))
 
@@ -60,7 +97,7 @@ def build_source_zip(version: str, outdir: Path, root: Path | None = None) -> Pa
     out = outdir / f"dsh-updater-src-v{version}.zip"
     top = f"dsh-updater-src-v{version}"
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
-        for name in SOURCE_FILES:
+        for name in names:
             z.write(base / name, f"{top}/{name}")
     return out
 
@@ -80,7 +117,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     print(f"已生成 {out}（{out.stat().st_size:,} 字节，版本 v{version}）")
-    for name in SOURCE_FILES:
+    for name in source_payload():
         print(f"    {name}")
     return 0
 

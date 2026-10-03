@@ -399,10 +399,14 @@ def test_build_source_zip_structure(tmp_path):
     with zipfile.ZipFile(out) as z:
         names = z.namelist()
     # 顶层目录必须带版本号，且只含清单内的文件
-    assert len(names) == len(pack_source.SOURCE_FILES)
+    payload = pack_source.source_payload()
+    assert len(names) == len(payload)
     assert all(n.startswith("dsh-updater-src-v9.9.9/") for n in names)
     assert "dsh-updater-src-v9.9.9/updater_core.py" in names
     assert "dsh-updater-src-v9.9.9/updater_gui.pyw" in names
+    # 语言包必须跟着走（v0.7.7 漏过：解压即 ModuleNotFoundError）
+    assert "dsh-updater-src-v9.9.9/i18n.py" in names
+    assert "dsh-updater-src-v9.9.9/i18n_data.py" in names
 
 
 def test_build_source_zip_refuses_when_file_missing(tmp_path, monkeypatch):
@@ -1079,3 +1083,36 @@ def test_cli_unknown_action_fails_cleanly(capsys):
     payload = json.loads(capsys.readouterr().out.strip())
     assert code == 1 and payload["ok"] is False
     assert payload["error"], "失败时必须带上原因"
+
+
+# ---------------------------------------------------------------------------
+# 源码版 zip：解压后必须真的能跑
+# ---------------------------------------------------------------------------
+def test_source_zip_is_runnable(tmp_path):
+    """源码版 zip 解压出来必须能 import —— 真实执行，不看清单。
+
+    踩过的坑：v0.7.7 及更早的源码 zip 只装了 7 个文件，漏掉了全部 i18n 模块，
+    用户按 README「下载 ZIP」解压后第一行 `from i18n import t` 就
+    ModuleNotFoundError。清单类断言挡不住这种漏，必须真的跑一次。
+    """
+    import subprocess
+    import sys
+    import zipfile
+
+    import pack_source
+
+    out = pack_source.build_source_zip("9.9.9", tmp_path)
+    with zipfile.ZipFile(out) as archive:
+        archive.extractall(tmp_path / "x")
+    inner = tmp_path / "x" / "dsh-updater-src-v9.9.9"
+
+    done = subprocess.run(
+        [sys.executable, "-X", "utf8", "-c", "import updater_core; print('ok')"],
+        cwd=inner, capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    assert done.returncode == 0, f"源码版 zip 跑不起来：{done.stderr[-400:]}"
+
+    # 解压后两种用法都要能直接用：桌面版 + DSH 网页插件
+    for name in ("package.json", "cordis.patch.yml", "index.js",
+                 "lib/client.js", "locale/zh.json", "icon.png"):
+        assert (inner / name).is_file(), f"源码版 zip 缺少 {name}"
