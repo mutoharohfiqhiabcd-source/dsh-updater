@@ -57,8 +57,9 @@ copy /Y updater_gui.pyw updater_core.py dsh_updater.ico 目标目录\
 dsh plugin --profile web add github:mutoharohfiqhiabcd-source/dsh-updater
 ```
 
-装好后**刷新一下 DSH 页面**即可看到卡片与按钮（DSH 会热重载插件行；
-若没出现再重启 DSH）。
+装好后**重启一次 DSH** 就能看到卡片与三个按钮。
+（实测：插件行会热重载，但**已加载过的旧版本升级后，Host 半边不会自己换掉**——
+不重启的话按钮能显示、一按就报 404，所以升级后请重启。）
 
 #### 会话标题栏的三个按钮
 

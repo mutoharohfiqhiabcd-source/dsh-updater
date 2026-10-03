@@ -73,8 +73,9 @@ gives the model a `dsh_updater` tool (`status` / `latest` / `notes` /
 dsh plugin --profile web add github:mutoharohfiqhiabcd-source/dsh-updater
 ```
 
-Refresh the DSH page afterwards — the plugin row hot-reloads, so the card and the
-header buttons appear without restarting (restart only if they do not).
+**Restart DSH once** afterwards. The plugin row hot-reloads, but upgrading a
+version that is already loaded leaves the old Host half in the running process —
+without a restart the buttons appear and then fail with 404.
 
 ### Three buttons in the session header
 
