@@ -543,7 +543,7 @@ def _looks_like_checkout_dir(path: Path) -> bool:
     if not pkg.is_file():
         return False
     try:
-        data = json.loads(pkg.read_text(encoding="utf-8", errors="replace"))
+        data = json.loads(pkg.read_text(encoding="utf-8-sig", errors="replace"))
     except Exception:  # noqa: BLE001
         return False
     return data.get("name") == "@deepseek-ai/dsh-root"
@@ -558,7 +558,7 @@ def _is_source_checkout(path: Path) -> bool:
     if not pkg.is_file():
         return False
     try:
-        data = json.loads(pkg.read_text(encoding="utf-8", errors="replace"))
+        data = json.loads(pkg.read_text(encoding="utf-8-sig", errors="replace"))
     except Exception:  # noqa: BLE001
         return False
     if data.get("name") != "@deepseek-ai/dsh-root":
@@ -600,7 +600,7 @@ def _probe_dir(d: Path, found: list, depth: int):
 
 def _read_dir_version(path: Path) -> str:
     try:
-        data = json.loads((path / "package.json").read_text(encoding="utf-8", errors="replace"))
+        data = json.loads((path / "package.json").read_text(encoding="utf-8-sig", errors="replace"))
         return data.get("version") or ""
     except Exception:  # noqa: BLE001
         return ""
@@ -678,7 +678,7 @@ def find_npm_global() -> list:
     if not pkg.is_file():
         return []
     try:
-        data = json.loads(pkg.read_text(encoding="utf-8", errors="replace"))
+        data = json.loads(pkg.read_text(encoding="utf-8-sig", errors="replace"))
         return [(pkg.parent, INSTALL_KIND_NPM, data.get("version") or "")]
     except Exception:  # noqa: BLE001
         return [(pkg.parent, INSTALL_KIND_NPM, "")]
@@ -698,7 +698,7 @@ def find_profiles() -> list:
     cli_pkg = profiles_root / "node_modules" / "@deepseek-ai" / "dsh" / "package.json"
     if cli_pkg.is_file():
         try:
-            cli_version = json.loads(cli_pkg.read_text(encoding="utf-8", errors="replace")).get(
+            cli_version = json.loads(cli_pkg.read_text(encoding="utf-8-sig", errors="replace")).get(
                 "version", ""
             )
         except Exception:  # noqa: BLE001
@@ -716,7 +716,7 @@ def find_profiles() -> list:
         if not manifest.is_file():
             continue
         try:
-            data = json.loads(manifest.read_text(encoding="utf-8", errors="replace"))
+            data = json.loads(manifest.read_text(encoding="utf-8-sig", errors="replace"))
         except Exception:  # noqa: BLE001
             data = {}
         if not data.get("name", "").startswith("dsh-profile"):
@@ -730,7 +730,7 @@ def find_profiles() -> list:
             if cand.is_file():
                 try:
                     ver = json.loads(
-                        cand.read_text(encoding="utf-8", errors="replace")
+                        cand.read_text(encoding="utf-8-sig", errors="replace")
                     ).get("version", "")
                 except Exception:  # noqa: BLE001
                     pass
@@ -772,8 +772,12 @@ def _dedupe_installs(installs: list) -> dict:
     return {"installs": list(seen.values()), "removed": removed}
 
 
-def detect_all() -> dict:
-    """检测本机所有 DSH 安装并拉取官方版本。返回 dict。"""
+def detect_all(fetch_official: bool = True) -> dict:
+    """检测本机所有 DSH 安装并拉取官方版本。返回 dict。
+
+    fetch_official=False 时跳过所有联网请求（界面可以先用本地结果秒开，
+    再异步补上官方版本），此时 official 为 None、各安装的 status 为 unknown。
+    """
     result = {"installs": [], "official": None, "errors": [],
               "selfcheck": {"duplicates": 0, "notes": []}}
     # 源码检出
@@ -821,11 +825,11 @@ def detect_all() -> dict:
             % (len(dedup["removed"]), t("、").join(r["path"] for r in dedup["removed"][:3]))
         )
 
-    # 官方版本
-    result["official"] = fetch_official_versions()
-    # 状态标注：源码检出对比 GitHub master；npm/profile 对比 npm 发布版
-    official_gh = result["official"]["github"]["version"]
-    official_npm = result["official"]["npm"]["version"]
+    # 官方版本（--offline 时整块跳过，一个网络请求都不发）
+    result["official"] = fetch_official_versions() if fetch_official else None
+    off = result["official"] or {}
+    official_gh = (off.get("github") or {}).get("version") or ""
+    official_npm = (off.get("npm") or {}).get("version") or ""
     for inst in result["installs"]:
         local = inst["version"] or ""
         if not local:
@@ -846,7 +850,10 @@ def detect_all() -> dict:
             else:
                 inst["status"] = t("已是最新")
             # —— 稳定性 / 适配性评估（依据官网信息）——
-            inst["assess"] = assess_version(local, result["official"], kind_for_ref=ref_kind)
+            inst["assess"] = (assess_version(local, result["official"], kind_for_ref=ref_kind)
+                              if fetch_official else
+                              {"grade": "unknown", "grade_label": GRADE_LABELS.get("unknown", ""),
+                               "reason": t("未联网检测")})
             inst["grade"] = inst["assess"]["grade"]
             inst["grade_label"] = inst["assess"]["grade_label"]
         else:
@@ -855,11 +862,12 @@ def detect_all() -> dict:
             inst["assess"] = {"grade": "unstable", "grade_label": GRADE_LABELS["unstable"],
                               "reason": t("版本号为空，官网无法核实")}
     # —— 自检 2：官方参照目标本身也做评估（更新文件稳定性）——
-    for tag, kind_for in (("github", "github"), ("npm", "npm")):
-        v = result["official"][tag].get("version")
-        if v:
-            result["official"][tag]["assess"] = assess_version(v, result["official"],
-                                                               kind_for_ref=kind_for)
+    if fetch_official and result["official"]:
+        for tag, kind_for in (("github", "github"), ("npm", "npm")):
+            v = result["official"][tag].get("version")
+            if v:
+                result["official"][tag]["assess"] = assess_version(v, result["official"],
+                                                                   kind_for_ref=kind_for)
     return result
 
 
@@ -1003,7 +1011,7 @@ def _find_package_dir(name: str, search_roots: list) -> Path | None:
 
 def _read_package_json(path: Path) -> dict:
     try:
-        return json.loads((path / "package.json").read_text(encoding="utf-8", errors="replace"))
+        return json.loads((path / "package.json").read_text(encoding="utf-8-sig", errors="replace"))
     except Exception:  # noqa: BLE001
         return {}
 
@@ -1173,7 +1181,7 @@ def parse_skill_version(skill_dir: Path) -> str | None:
         # 也可能是单个 .md 文件技能目录（skill-filesystem 支持），这里只认 SKILL.md
         return None
     try:
-        text = md.read_text(encoding="utf-8", errors="replace")[:4000]
+        text = md.read_text(encoding="utf-8-sig", errors="replace")[:4000]
     except Exception:  # noqa: BLE001
         return None
     # frontmatter: 以 --- 开头
@@ -2029,7 +2037,7 @@ _EMPTY_PREFS = {"schema": 1, "settings": {}, "cache": {}, "sources": {}}
 
 def _read_json(path: Path) -> dict:
     try:
-        data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+        data = json.loads(path.read_text(encoding="utf-8-sig", errors="replace"))
     except Exception:  # noqa: BLE001
         return {}
     return data if isinstance(data, dict) else {}
@@ -2370,5 +2378,113 @@ def _selftest() -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------
+# JSON CLI —— 供 DSH 插件等外部调用（`python updater_core.py --json <动作>`）
+# ---------------------------------------------------------------------------
+CLI_ACTIONS = ("detect", "rollback-targets", "rollback-source", "rollback-npm", "version")
+
+
+def _cli_status_code(local: str, ref: str) -> str:
+    """把「本地 vs 参照版本」折算成机器可读的状态码，便于前端自己出文案。"""
+    if not local or not ref:
+        return "unknown"
+    try:
+        return "update-available" if compare_versions(ref, local) > 0 else "latest"
+    except Exception:  # noqa: BLE001
+        return "unknown"
+
+
+def _cli_detect(offline: bool = False) -> dict:
+    """检测结果精简版：只保留界面需要的字段，且不带任何翻译文案。"""
+    raw = detect_all(fetch_official=not offline)
+    installs = []
+    for inst in raw.get("installs", []):
+        local = str(inst.get("version") or "")
+        ref = str(inst.get("ref_version") or "")
+        installs.append({
+            "path": str(inst.get("path") or ""),
+            "kind": str(inst.get("kind") or ""),
+            "version": local,
+            "ref_version": ref,
+            "ref_kind": str(inst.get("ref_kind") or ""),
+            "status": _cli_status_code(local, ref),
+            "grade": str(inst.get("grade") or ""),
+            "updateable": bool(inst.get("updateable")),
+        })
+    official = raw.get("official")
+    github = (official or {}).get("github") or {}
+    npm = (official or {}).get("npm") or {}
+    return {
+        "installs": installs,
+        "offline": offline,
+        "official": None if not official else {
+            "github": {"version": str(github.get("version") or "")},
+            "npm": {"version": str(npm.get("version") or "")},
+        },
+        "errors": [str(e) for e in raw.get("errors", [])],
+        "summary": {
+            "total": len(installs),
+            "update_available": sum(1 for i in installs if i["status"] == "update-available"),
+        },
+    }
+
+
+def _self_version() -> str:
+    """本工具自身版本 —— 以 package.json 为唯一来源（GUI 的 APP_VERSION 有测试锁同步）。"""
+    try:
+        pkg = Path(__file__).with_name("package.json")
+        return str(json.loads(pkg.read_text(encoding="utf-8-sig")).get("version") or "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _cli_version() -> dict:
+    """轻量版本信息：本机更新器自身版本 + 官方最新版本（不扫盘）。"""
+    return {
+        "updater": fetch_self_latest(_self_version()),
+        "official": fetch_official_versions(),
+    }
+
+
+def _cli_main(argv: list) -> int:
+    """`--json <动作>` 入口：始终输出一行 JSON，退出码 0/1。
+
+    可选 `--offline`：一个网络请求都不发（本地扫描照常），用于界面秒开。
+    """
+    argv = list(argv)
+    offline = "--offline" in argv
+    argv = [a for a in argv if a != "--offline"]
+    action = (argv[0] if argv else "").strip() or "detect"
+    envelope = {"ok": False, "action": action, "data": None, "error": None, "log": []}
+    lines: list = []
+    try:
+        if action == "detect":
+            envelope["data"] = _cli_detect(offline)
+        elif action == "version":
+            envelope["data"] = _cli_version()
+        elif action == "rollback-targets":
+            envelope["data"] = rollback_targets()
+        elif action == "rollback-source":
+            if len(argv) < 3:
+                raise RuntimeError(t("用法：--json rollback-source <目标目录> <备份目录>"))
+            envelope["data"] = rollback_source(Path(argv[1]), Path(argv[2]), log=lines.append)
+        elif action == "rollback-npm":
+            if len(argv) < 2:
+                raise RuntimeError(t("用法：--json rollback-npm <版本号>"))
+            envelope["data"] = rollback_npm(argv[1], log=lines.append)
+        else:
+            raise RuntimeError(t("未知动作：{p1}", p1=action))
+        envelope["ok"] = True
+    except Exception as e:  # noqa: BLE001
+        envelope["error"] = f"{type(e).__name__}: {e}"
+    envelope["log"] = lines[-200:]
+    sys.stdout.write(json.dumps(envelope, ensure_ascii=False, default=str))
+    sys.stdout.write("\n")
+    return 0 if envelope["ok"] else 1
+
+
 if __name__ == "__main__":
+    if "--json" in sys.argv:
+        idx = sys.argv.index("--json")
+        sys.exit(_cli_main(sys.argv[idx + 1:]))
     sys.exit(_selftest())

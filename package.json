@@ -1,7 +1,7 @@
 {
   "name": "dsh-updater",
   "version": "0.7.7",
-  "description": "在 DSH 里检查 / 下载 / 启动 dsh 自动更新器（Check, download and launch the DSH updater from inside DSH）",
+  "description": "在 DSH 里检测 / 回滚 / 查看版本，并管理 dsh 自动更新器（In-DSH check, rollback and version panel for the DSH updater）",
   "keywords": [
     "dsh",
     "dsh-plugin",
@@ -13,6 +13,7 @@
   "icon": "./icon.png",
   "exports": {
     ".": "./index.js",
+    "./client": "./lib/client.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json",
     "./locale/en.json": "./locale/en.json",
@@ -20,10 +21,14 @@
   },
   "files": [
     "index.js",
+    "lib/client.js",
     "cordis.patch.yml",
     "icon.png",
     "locale/*.json",
-    "README.md"
+    "README.md",
+    "updater_core.py",
+    "i18n.py",
+    "i18n_*.py"
   ],
   "repository": {
     "type": "git",
@@ -42,6 +47,9 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
     }
   }
 }

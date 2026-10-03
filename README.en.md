@@ -75,6 +75,21 @@ dsh plugin --profile web add github:mutoharohfiqhiabcd-source/dsh-updater
 
 Restart DSH afterwards — bundle membership is fixed at startup.
 
+### Three buttons in the session header
+
+Once installed, every session's header (the row holding the background-jobs chip)
+gains three buttons:
+
+| Button | What it does |
+| --- | --- |
+| **↻ Check** | Lists every local DSH installation (source checkout / npm global / runtime profile) with its version instantly, then fills in the upstream latest version and the update-available state asynchronously |
+| **↩ Roll back** | Lists source backups, npm restore points and profile restore points; the first press arms *Confirm?* and the second performs it — the current directory is saved as a fresh backup first, so a rollback is itself reversible |
+| **ⓘ Version** | Updater version, latest Release, local Python, local and archived EXEs, and every installation's version |
+
+Check and roll back are executed by this repository's `updater_core.py` (its new
+`--json` mode), so they share the desktop app's logic. They need Python 3.10+ on
+the machine; without it the panel says so and version info still works.
+
 > DSH's "Official" group only holds plugins shipped inside DSH itself; third-party
 > plugins always land in "Installed", with no review or store submission.
 > ⚠️ The plugin runs inside the DSH host process, **outside the workspace

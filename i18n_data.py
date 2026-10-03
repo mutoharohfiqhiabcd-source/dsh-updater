@@ -310,3 +310,39 @@ from i18n_rb2 import TABLES_RB2 as _RB2
 
 for _lang, _tbl in _RB2.items():
     TABLES.setdefault(_lang, {}).update(_tbl)
+
+
+# ---------------------------------------------------------------------------
+# JSON CLI（`python updater_core.py --json <动作>`，供 DSH 插件按钮调用）
+# ---------------------------------------------------------------------------
+TABLES["zh-TW"].update({
+    "未联网检测": "未連網檢測",
+    "用法：--json rollback-source <目标目录> <备份目录>":
+        "用法：--json rollback-source <目標目錄> <備份目錄>",
+    "用法：--json rollback-npm <版本号>": "用法：--json rollback-npm <版本號>",
+    "未知动作：{p1}": "未知動作：{p1}",
+})
+
+TABLES["en"].update({
+    "未联网检测": "Not checked (offline)",
+    "用法：--json rollback-source <目标目录> <备份目录>":
+        "usage: --json rollback-source <target directory> <backup directory>",
+    "用法：--json rollback-npm <版本号>": "usage: --json rollback-npm <version>",
+    "未知动作：{p1}": "unknown action: {p1}",
+})
+
+TABLES["ja"].update({
+    "未联网检测": "オフラインのため未確認",
+    "用法：--json rollback-source <目标目录> <备份目录>":
+        "使い方：--json rollback-source <対象ディレクトリ> <バックアップディレクトリ>",
+    "用法：--json rollback-npm <版本号>": "使い方：--json rollback-npm <バージョン>",
+    "未知动作：{p1}": "不明なアクション：{p1}",
+})
+
+TABLES["ko"].update({
+    "未联网检测": "오프라인이라 확인 안 함",
+    "用法：--json rollback-source <目标目录> <备份目录>":
+        "사용법: --json rollback-source <대상 디렉터리> <백업 디렉터리>",
+    "用法：--json rollback-npm <版本号>": "사용법: --json rollback-npm <버전>",
+    "未知动作：{p1}": "알 수 없는 동작: {p1}",
+})

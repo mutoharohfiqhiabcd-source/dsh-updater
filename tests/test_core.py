@@ -955,3 +955,127 @@ def test_startup_syncs_palette_with_saved_theme():
     tail = src[src.index(anchor):src.index(anchor) + 900]
     assert "CLR.update(THEMES[" in tail, \
         "恢复 _dark 之后没有同步 CLR —— 会导致标志与配色错位"
+
+
+# ---------------------------------------------------------------------------
+# DSH 插件包：package.json / lib/client.js / updater_core.py --json
+# ---------------------------------------------------------------------------
+def _plugin_manifest() -> dict:
+    return json.loads((REPO_ROOT / "package.json").read_text(encoding="utf-8-sig"))
+
+
+def test_package_version_matches_gui_app_version():
+    """package.json 的版本必须和 GUI 的 APP_VERSION 一致。
+
+    插件页显示的是 package.json 的版本，桌面版显示的是 APP_VERSION；
+    两个数字一旦岔开，用户会看到两个「当前版本」。
+    """
+    src = (REPO_ROOT / "updater_gui.pyw").read_text(encoding="utf-8")
+    found = re.search(r'APP_VERSION\s*=\s*"([^"]+)"', src)
+    assert found, "updater_gui.pyw 里找不到 APP_VERSION"
+    assert found.group(1) == _plugin_manifest()["version"], \
+        f"package.json={_plugin_manifest()['version']} 与 APP_VERSION={found.group(1)} 不一致"
+
+
+def _local_python_modules(entry: Path) -> set:
+    """从 entry 出发，收集它（含传递依赖）用到的同目录模块文件名。"""
+    seen, queue = set(), [entry]
+    while queue:
+        path = queue.pop()
+        if path in seen or not path.is_file():
+            continue
+        seen.add(path)
+        text = path.read_text(encoding="utf-8-sig", errors="replace")
+        for name in re.findall(r"^(?:from|import)\s+(i18n\w*)", text, re.M):
+            queue.append(REPO_ROOT / f"{name}.py")
+    return {p.name for p in seen}
+
+
+def test_plugin_files_cover_every_runtime_module():
+    """package.json 的 files 白名单必须覆盖 updater_core.py 的全部本地依赖。
+
+    插件是按 files 打包后进用户 profile 的（pnpm 只装白名单里的文件）：
+    漏掉任何一个 i18n_*.py，Python 侧就 ImportError，检测/回滚在用户机器上
+    直接不可用——而本地开发（整仓库都在）完全复现不出来。
+    """
+    from fnmatch import fnmatch
+
+    patterns = _plugin_manifest()["files"]
+    needed = {"index.js", "cordis.patch.yml", "icon.png", "lib/client.js",
+              "locale/zh.json", "locale/en.json"} | _local_python_modules(REPO_ROOT / "updater_core.py")
+    missing = sorted(name for name in needed
+                     if not any(fnmatch(name, pattern) for pattern in patterns))
+    assert not missing, "files 白名单漏了这些运行时文件：" + ", ".join(missing)
+
+
+def test_plugin_client_declaration_is_complete():
+    """dsh.client 声明、./client 导出与实际产物三者必须对齐。
+
+    client 半边少一样，插件页里不会有任何报错，只是会话标题栏的按钮不出现。
+    """
+    manifest = _plugin_manifest()
+    assert manifest["dsh"]["client"]["platform"] == "web"
+    exported = manifest["exports"]["./client"]
+    assert (REPO_ROOT / exported).is_file(), f"{exported} 不存在"
+    bundle = (REPO_ROOT / exported).read_text(encoding="utf-8")
+    assert "window.__ModuleLoader__.load(" in bundle, "客户端产物必须是闭包工厂格式"
+    assert f"id: '{manifest['name']}'" in bundle, "工厂注册的 id 必须等于包名"
+    assert (REPO_ROOT / manifest["dsh"]["bundle"]["patch"]).is_file()
+
+
+def test_checkout_detection_tolerates_utf8_bom(tmp_path):
+    """package.json 带 BOM 也要能识别。
+
+    Windows 上的记事本 / 部分编辑器会写 BOM，json.loads 遇到 BOM 直接抛错，
+    结果是「明明是正确的检出，检测却说不是」——回滚会被安全阀挡下来。
+    """
+    root = tmp_path / "proj"
+    root.mkdir()
+    payload = json.dumps({"name": "@deepseek-ai/dsh-root", "version": "1.0"})
+    (root / "package.json").write_bytes(b"\xef\xbb\xbf" + payload.encode("utf-8"))
+    cli = root / "apps" / "cli"
+    cli.mkdir(parents=True)
+    (cli / "package.json").write_text("{}", encoding="utf-8")
+    assert core._looks_like_checkout_dir(root) is True
+    assert core._is_source_checkout(root) is True
+
+
+def test_cli_detect_offline_never_touches_network(monkeypatch, capsys):
+    """--offline 必须一个网络请求都不发（界面靠它秒开）。"""
+    touched = []
+    monkeypatch.setattr(core, "fetch_official_versions",
+                        lambda *a, **k: touched.append("official") or {})
+    monkeypatch.setattr(core, "find_source_checkouts", lambda: [])
+    monkeypatch.setattr(core, "find_npm_global", lambda: [])
+    monkeypatch.setattr(core, "find_profiles", lambda: [])
+    code = core._cli_main(["detect", "--offline"])
+    payload = json.loads(capsys.readouterr().out.strip())
+    assert code == 0 and payload["ok"] is True
+    assert payload["data"]["offline"] is True
+    assert payload["data"]["official"] is None
+    assert touched == [], "--offline 下不允许联网"
+
+
+def test_cli_detect_reports_installs_without_translation(monkeypatch, capsys):
+    """检测结果必须是「机器可读」的：状态码而不是译文。"""
+    checkout = Path("D:/fake/deepseek-harness-master")
+    monkeypatch.setattr(core, "fetch_official_versions", lambda *a, **k: {})
+    monkeypatch.setattr(core, "find_source_checkouts", lambda: [(checkout, "source", "0.2.0")])
+    monkeypatch.setattr(core, "find_npm_global", lambda: [])
+    monkeypatch.setattr(core, "find_profiles", lambda: [])
+    code = core._cli_main(["detect"])
+    payload = json.loads(capsys.readouterr().out.strip())
+    install = payload["data"]["installs"][0]
+    assert code == 0
+    assert install["kind"] == "source"
+    assert install["version"] == "0.2.0"
+    assert install["status"] in {"unknown", "latest", "update-available"}
+    assert not re.search(r"[\u4e00-\u9fff]", json.dumps(payload, ensure_ascii=False)), \
+        "CLI 结果里不应出现中文文案（前端自己出文案）"
+
+
+def test_cli_unknown_action_fails_cleanly(capsys):
+    code = core._cli_main(["没这个动作"])
+    payload = json.loads(capsys.readouterr().out.strip())
+    assert code == 1 and payload["ok"] is False
+    assert payload["error"], "失败时必须带上原因"
