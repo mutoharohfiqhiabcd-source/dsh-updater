@@ -57,6 +57,31 @@ Requirements:
 
 ---
 
+## Install as a DSH plugin
+
+This repository is also a **DSH plugin bundle** (`dsh.bundle` in `package.json`).
+Once installed it appears under **Plugins → Installed** in the DSH sidebar and
+gives the model a `dsh_updater` tool (`status` / `latest` / `notes` /
+`download` / `launch`).
+
+**GUI:** sidebar → **Plugins** → **Add plugin** → enter
+`github:mutoharohfiqhiabcd-source/dsh-updater` → **Install**.
+
+**CLI:**
+
+```bat
+dsh plugin --profile web add github:mutoharohfiqhiabcd-source/dsh-updater
+```
+
+Restart DSH afterwards — bundle membership is fixed at startup.
+
+> DSH's "Official" group only holds plugins shipped inside DSH itself; third-party
+> plugins always land in "Installed", with no review or store submission.
+> ⚠️ The plugin runs inside the DSH host process, **outside the workspace
+> sandbox**; `download` and `launch` really write files and start processes.
+
+---
+
 ## Where local data is stored
 
 Everything lives in a single "player preferences"-style file:

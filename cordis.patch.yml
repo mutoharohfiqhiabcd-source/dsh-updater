@@ -1,0 +1,20 @@
+# dsh-updater —— DSH bundle patch
+#
+# 这一层把「DSH 自动更新器」挂进 profile。安装方式（三选一）：
+#
+#   dsh plugin --profile <name> add github:mutoharohfiqhiabcd-source/dsh-updater
+#   dsh plugin --profile <name> add dsh-updater        # 发布到 npm 之后
+#   dsh plugin --profile <name> add .                  # 从本仓库目录安装
+#
+# 也可以在 DSH Web 侧边栏 **插件 → 添加插件** 里填上面那个 GitHub 地址。
+#
+# 行配置（可写在本 profile 的 cordis.patch.yml 里覆盖）：
+#   repo         GitHub 仓库        默认 mutoharohfiqhiabcd-source/dsh-updater
+#   asset        Release 资产名     默认 DeepSeekHarnessUpdater.exe
+#   downloadDir  下载目录          默认 用户 Downloads
+#   updaterPath  本地更新器绝对路径 默认自动探测
+#   searchDirs   额外扫描目录       默认 []（列出其中的 *.exe）
+
+- insert:
+    - id: dsh-updater
+      name: dsh-updater

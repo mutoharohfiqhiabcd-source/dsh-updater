@@ -42,6 +42,28 @@ cd dsh-updater
 copy /Y updater_gui.pyw updater_core.py dsh_updater.ico 目标目录\
 ```
 
+### 方式五：作为 DSH 插件安装（在 DSH 里直接用）
+
+本仓库同时是一个 **DSH 插件包**（`package.json` 里声明了 `dsh.bundle`）。
+装进 DSH 后，侧边栏「**插件 → 已安装**」会出现一张卡片，
+并给模型一个 `dsh_updater` 工具（`status` / `latest` / `notes` / `download` / `launch`）。
+
+**图形界面**：DSH 侧边栏 → **插件** → **添加插件** → 填
+`github:mutoharohfiqhiabcd-source/dsh-updater` → **安装**。
+
+**命令行**：
+
+```bat
+dsh plugin --profile web add github:mutoharohfiqhiabcd-source/dsh-updater
+```
+
+安装后**重启 DSH**（bundle 成员在启动时确定），卡片即可见。
+
+> 说明：DSH 的「官方」分组只放随 DSH 发行版自带的插件；第三方插件一律出现在
+> 「已安装」分组，无需审核、无需上架。
+> ⚠️ 插件运行在 DSH 主进程内、**不受工作区沙箱限制**，`download` / `launch`
+> 会真实写盘并启动进程。
+
 ### 首次运行（可选：创建桌面快捷方式）
 1. 运行一次确认界面正常；
 2. 如需桌面快捷方式：右键 **`启动更新器.bat`** → **发送到 → 桌面快捷方式**，

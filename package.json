@@ -1,0 +1,47 @@
+{
+  "name": "dsh-updater",
+  "version": "0.7.7",
+  "description": "在 DSH 里检查 / 下载 / 启动 dsh 自动更新器（Check, download and launch the DSH updater from inside DSH）",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "updater"
+  ],
+  "type": "module",
+  "main": "index.js",
+  "icon": "./icon.png",
+  "exports": {
+    ".": "./index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json",
+    "./locale/en.json": "./locale/en.json",
+    "./locale/zh.json": "./locale/zh.json"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "icon.png",
+    "locale/*.json",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mutoharohfiqhiabcd-source/dsh-updater.git"
+  },
+  "homepage": "https://github.com/mutoharohfiqhiabcd-source/dsh-updater",
+  "bugs": {
+    "url": "https://github.com/mutoharohfiqhiabcd-source/dsh-updater/issues"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-tools": "*"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

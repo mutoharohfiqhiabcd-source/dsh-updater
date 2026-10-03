@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "DSH 自动更新器",
+    "description": "在 DSH 里检查、下载、启动 dsh 自动更新器"
+  }
+}
