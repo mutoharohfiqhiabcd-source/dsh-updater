@@ -1,5 +1,15 @@
 # DeepSeek Harness 自动检测与更新器
 
+**两种形态，同一套逻辑：**
+
+| 形态 | 是什么 | 怎么装 |
+| --- | --- | --- |
+| 🖥️ **桌面版**（Windows 小工具） | 独立程序，不装 DSH 也能用 | [下载 EXE ↗](https://github.com/mutoharohfiqhiabcd-source/dsh-updater/releases/latest)，或用源码版 |
+| 🧩 **DSH 网页版插件** | 装进 DSH，**会话标题栏多出「检测 / 回滚 / 版本」三个按钮** | 见下方[方式五](#方式五作为-dsh-插件安装在-dsh-里直接用) |
+
+两种形态**不是两套实现**：网页插件的按钮直接调用本仓库的 `updater_core.py`，
+与桌面版共用同一套检测 / 回滚逻辑。
+
 一个带图形界面的桌面小工具，用于：
 
 1. **自动检测电脑内的 DeepSeek Harness 安装**并读取各自版本；
@@ -7,6 +17,43 @@
 3. **一键更新**：本地版本与官方不同时，自动下载官方源码 zip → 备份原目录 → 整目录替换（自动保留 `node_modules` / `.git`）；
 4. **插件检测**：扫描 DeepSeek Harness 运行时中已启用 / 内置的插件（显示 **名称、大小、版本号**）；
 5. **技能检测**：扫描 `.dsh\skills` 下的技能（显示 **名称、大小、版本号**）。
+
+> 仓库：<https://github.com/mutoharohfiqhiabcd-source/dsh-updater> ·
+> DSH 上游：<https://github.com/deepseek-ai/deepseek-harness>
+
+---
+
+## 界面预览
+
+### 🖥️ 桌面版
+
+| 主界面（浅色） | 主界面（深色） |
+| --- | --- |
+| ![桌面版主界面（浅色）](images/desktop-01-light.png) | ![桌面版主界面（深色）](images/desktop-02-dark.png) |
+
+| 版本性质说明（点「版本性质」列头） | 回滚窗口（备份 / npm / profile 三类） |
+| --- | --- |
+| ![版本性质说明](images/desktop-03-type-info.png) | ![回滚窗口](images/desktop-04-rollback.png) |
+
+<details>
+<summary>再一张：界面语言切换（简体中文 / 繁體中文 / English / 日本語 / 한국어）</summary>
+
+![语言切换](images/desktop-05-language.png)
+
+</details>
+
+### 🧩 DSH 网页版插件
+
+装进 DSH 后，**每个会话的标题栏**（原本只有「后台任务」那一排）会多出三个按钮：
+
+![会话标题栏的三个按钮](images/plugin-01-header-buttons.png)
+
+| 回滚：列出所有源码备份，点一次变「确认回滚？」再点一次才执行 | 插件在 DSH 的「插件 → 已安装」里的样子 |
+| --- | --- |
+| ![回滚面板](images/plugin-02-rollback-panel.png) | ![插件管理页](images/plugin-03-plugins-page.png) |
+
+> ⚠️ 插件运行在 DSH 主进程内、**不受工作区沙箱限制**；检测 / 回滚 / 下载 / 启动
+> 都会真实读写磁盘、真实启动进程。
 
 ---
 

@@ -7,6 +7,54 @@ A small Windows desktop tool that manages **DeepSeek Harness** installations on
 your machine: detect what is installed, compare against the official release,
 scan plugins/skills, update in one click, and keep local data safe.
 
+**Two shapes, one implementation:**
+
+| Shape | What it is | How to get it |
+| --- | --- | --- |
+| 🖥️ **Desktop app** | Standalone Windows program, no DSH required | [Download the EXE ↗](https://github.com/mutoharohfiqhiabcd-source/dsh-updater/releases/latest) |
+| 🧩 **DSH web plugin** | Adds **Check / Roll back / Version** buttons to every session header in the DSH web UI | `dsh plugin --profile web add github:mutoharohfiqhiabcd-source/dsh-updater` |
+
+The plugin's buttons call this repository's `updater_core.py` — the desktop app
+and the web plugin share one set of detection and rollback logic.
+
+Repository: <https://github.com/mutoharohfiqhiabcd-source/dsh-updater> ·
+DSH upstream: <https://github.com/deepseek-ai/deepseek-harness>
+
+---
+
+## Screenshots
+
+### 🖥️ Desktop app
+
+| Main window (light) | Main window (dark) |
+| --- | --- |
+| ![Main window, light](images/desktop-01-light.png) | ![Main window, dark](images/desktop-02-dark.png) |
+
+| Version-nature explanation | Rollback window |
+| --- | --- |
+| ![Version nature](images/desktop-03-type-info.png) | ![Rollback window](images/desktop-04-rollback.png) |
+
+<details>
+<summary>One more: interface language switching (5 languages)</summary>
+
+![Language switching](images/desktop-05-language.png)
+
+</details>
+
+### 🧩 DSH web plugin
+
+Three buttons appear in every session header (the row that already holds the
+background-jobs chip):
+
+![Three buttons in the session header](images/plugin-01-header-buttons.png)
+
+| Roll back: every source backup, armed by a first press and executed by the second | The plugin card under Plugins → Installed |
+| --- | --- |
+| ![Rollback panel](images/plugin-02-rollback-panel.png) | ![Plugins page](images/plugin-03-plugins-page.png) |
+
+> ⚠️ The plugin runs inside the DSH host process, **outside the workspace
+> sandbox**: check, roll back, download and launch really touch the disk.
+
 ---
 
 ## Features

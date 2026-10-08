@@ -3,6 +3,32 @@ v0.8.0 发布说明 —— **网页版插件格式**（不是软件更新）
 > 本文件是「最新一版」的更新说明，发布新版本前请改成当版内容。
 > GitHub Actions 在推送 `v*` tag 时会把这个文件的内容作为 Release 说明（`body_path`）。
 
+## 🔗 相关链接
+
+| 名称 | 链接 |
+| --- | --- |
+| **本仓库（桌面版 + DSH 插件本体）** | <https://github.com/mutoharohfiqhiabcd-source/dsh-updater> |
+| **DSH 插件安装地址**（填进 DSH「插件 → 添加插件」） | `github:mutoharohfiqhiabcd-source/dsh-updater` |
+| DSH 官方仓库（插件宿主） | <https://github.com/deepseek-ai/deepseek-harness> |
+| 最新 Release 下载 | <https://github.com/mutoharohfiqhiabcd-source/dsh-updater/releases/latest> |
+| 功能介绍推文 | <https://x.com/0ncv2l/status/2106351434749161735> |
+
+一行安装（装完**重启 DSH**）：
+
+```bat
+dsh plugin --profile web add github:mutoharohfiqhiabcd-source/dsh-updater
+```
+
+## 🖼️ 长这样
+
+![会话标题栏的三个按钮](https://raw.githubusercontent.com/mutoharohfiqhiabcd-source/dsh-updater/main/images/plugin-01-header-buttons.png)
+
+| 回滚面板（点一次确认、再点一次才执行） | 插件管理页 |
+| --- | --- |
+| ![回滚面板](https://raw.githubusercontent.com/mutoharohfiqhiabcd-source/dsh-updater/main/images/plugin-02-rollback-panel.png) | ![插件管理页](https://raw.githubusercontent.com/mutoharohfiqhiabcd-source/dsh-updater/main/images/plugin-03-plugins-page.png) |
+
+桌面版的样子见 [README](https://github.com/mutoharohfiqhiabcd-source/dsh-updater#界面预览)。
+
 ## ❗ 先说清楚：这一版的主角不是软件
 
 v0.8.0 **没有对桌面程序做任何功能改动**。桌面 EXE / 源码版仍在，只是跟着版本号
