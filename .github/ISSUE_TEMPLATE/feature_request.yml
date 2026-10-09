@@ -1,0 +1,45 @@
+name: 功能建议
+description: 想要的新功能或改进
+title: "[建议] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        这个项目是个人自用、按需维护的，所以**说清使用场景比说清实现更重要** ——
+        知道你要解决什么问题，我才好判断值不值得做。
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 针对哪个形态
+      options:
+        - 桌面版
+        - DSH 网页版插件
+        - 两者都行 / 不确定
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 你想解决什么问题
+      description: 现在是怎么做的、哪里别扭
+      placeholder: 每次更新完都要手动去 …
+    validations:
+      required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: 期望的做法（可选）
+      description: 有具体想法就写，没有也没关系
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 补充
+      validations:
+        required: false

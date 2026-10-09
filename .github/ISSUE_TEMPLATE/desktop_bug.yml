@@ -1,0 +1,84 @@
+name: 桌面版问题
+description: 桌面版（EXE / 源码版）出错或行为不符合预期
+title: "[桌面版] "
+labels: ["bug", "desktop"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈！把下面几项填全能省一轮来回。
+        如果是 **DSH 网页版插件**的问题，请改用「插件问题」模板。
+
+  - type: textarea
+    id: what
+    attributes:
+      label: 发生了什么
+      description: 实际看到的现象，以及你期望的结果
+      placeholder: 点「重新检测」后，状态列显示……，但我期望……
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 打开更新器
+        2. 勾选某个安装
+        3. 点击「⬇ 更新所选安装」
+        4. 看到报错……
+    validations:
+      required: true
+
+  - type: dropdown
+    id: edition
+    attributes:
+      label: 用的哪种版本形态
+      options:
+        - EXE 版（DeepSeekHarnessUpdater.exe）
+        - 源码版（python updater_gui.pyw）
+        - 从 git clone 直接跑
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: 更新器版本
+      description: 窗口标题栏能看到，形如 0.8.0
+      placeholder: 0.8.0
+    validations:
+      required: true
+
+  - type: input
+    id: windows
+    attributes:
+      label: Windows 版本
+      placeholder: Windows 11 24H2
+    validations:
+      required: true
+
+  - type: input
+    id: python
+    attributes:
+      label: Python 版本（源码版请填）
+      placeholder: 3.12.4
+
+  - type: dropdown
+    id: theme
+    attributes:
+      label: 主题
+      options:
+        - 浅色
+        - 深色
+        - 不确定
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 截图 / 报错原文 / 其它线索
+      description: 控制台输出、`dsh_updater.log` 里的内容、截图都可以直接贴
+    validations:
+      required: false

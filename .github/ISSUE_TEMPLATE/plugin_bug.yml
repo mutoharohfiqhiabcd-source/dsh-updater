@@ -1,0 +1,84 @@
+name: 插件问题
+description: DSH 网页版插件（会话标题栏的「检测 / 回滚 / 版本」）出错
+title: "[插件] "
+labels: ["bug", "plugin"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ### ⚠️ 先自查这两条（能解决大半问题）
+
+        1. **升级后重启过 DSH 吗？** 磁盘上的文件换掉后，运行中的 DSH 仍持有旧的
+           Host 半边，此时按钮会出现、但一按就报 404。**重启一次 DSH** 即可。
+        2. **装的是哪个版本？** 插件页「已安装」里能看到版本号；旧版没有这三个按钮。
+
+        如果以上都没问题，请继续填写。
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 哪个按钮出问题
+      options:
+        - 安装 / 卸载本身
+        - ↻ 检测
+        - ↩ 回滚
+        - ⓘ 版本
+        - 界面显示（图标 / 文案 / 位置）
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: 发生了什么
+      description: 面板里显示的原文（红字）请尽量照抄，别改写
+      placeholder: 点「检测」后红字显示……
+    validations:
+      required: true
+
+  - type: input
+    id: plugin_version
+    attributes:
+      label: 插件版本
+      description: DSH「插件 → 已安装 → dsh-updater」卡片上能看到
+      placeholder: 0.8.0
+    validations:
+      required: true
+
+  - type: input
+    id: dsh_version
+    attributes:
+      label: DSH 版本
+      description: 侧边栏左下角或「设置 → 关于」，形如 0.2.0-rc.2
+      placeholder: 0.2.0-rc.2
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: 安装方式
+      options:
+        - github:mutoharohfiqhiabcd-source/dsh-updater（推荐）
+        - 本地路径 / link:
+        - npm 包名
+        - 其它
+    validations:
+      required: true
+
+  - type: input
+    id: python
+    attributes:
+      label: 本机 Python（检测 / 回滚需要）
+      description: 终端里 `python --version` 的输出；没装就写「未安装」
+      placeholder: 3.12.4
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 截图 / 其它线索
+      description: 面板截图、DSH 启动日志（`~/.dsh/logs/`）都可以贴
+    validations:
+      required: false
