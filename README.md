@@ -19,7 +19,8 @@
 5. **技能检测**：扫描 `.dsh\skills` 下的技能（显示 **名称、大小、版本号**）。
 
 > 仓库：<https://github.com/mutoharohfiqhiabcd-source/dsh-updater> ·
-> DSH 上游：<https://github.com/deepseek-ai/deepseek-harness>
+> DSH 上游：<https://github.com/deepseek-ai/deepseek-harness> ·
+> 社区讨论帖（DSH Discussions · Show Your Plugins!）：<https://github.com/deepseek-ai/deepseek-harness/discussions/9221>
 
 ---
 

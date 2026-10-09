@@ -18,7 +18,9 @@ The plugin's buttons call this repository's `updater_core.py` — the desktop ap
 and the web plugin share one set of detection and rollback logic.
 
 Repository: <https://github.com/mutoharohfiqhiabcd-source/dsh-updater> ·
-DSH upstream: <https://github.com/deepseek-ai/deepseek-harness>
+DSH upstream: <https://github.com/deepseek-ai/deepseek-harness> ·
+Announcement thread (DSH Discussions · Show Your Plugins!):
+<https://github.com/deepseek-ai/deepseek-harness/discussions/9221>
 
 ---
 
