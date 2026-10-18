@@ -1116,3 +1116,257 @@ def test_source_zip_is_runnable(tmp_path):
     for name in ("package.json", "cordis.patch.yml", "index.js",
                  "lib/client.js", "locale/zh.json", "icon.png"):
         assert (inner / name).is_file(), f"源码版 zip 缺少 {name}"
+
+
+# ---------------------------------------------------------------------------
+# 官方版本抓取：多源并发 + 本地缓存（v0.8.1 检测提速）
+# ---------------------------------------------------------------------------
+def _official_sample(npm_version="0.2.0-rc.2", gh_version="0.2.1-rc.2"):
+    """构造一份「完整」的官方版本结果（两个关键版本号都有）。"""
+    data = core._empty_official()
+    data["github"].update({"version": gh_version, "ok": True,
+                           "tags": ["0.2.1-rc.2", "0.2.0-rc.2"]})
+    data["npm"].update({"version": npm_version, "ok": True,
+                        "dist_tags": {"latest": npm_version},
+                        "versions": [npm_version, "0.2.0-rc.1"]})
+    return data
+
+
+def _fake_http_get_router(seen=None, gh_version="0.2.1-rc.2", npm_version="0.2.0-rc.2"):
+    """按 URL 返回合理的官方数据，模拟所有源都可用（不联网）。"""
+    def fake_http_get(url, timeout=25.0, binary=False, headers=None):
+        if seen is not None:
+            seen.append(url)
+        if "package.json" in url:
+            payload = {"version": gh_version, "engines": {"node": ">=22"}}
+        elif url.rstrip("/").endswith("/latest"):
+            payload = {"version": npm_version, "engines": {"node": ">=22"}}
+        elif "dist-tags" in url:
+            payload = {"latest": npm_version}
+        elif "commits" in url:
+            payload = [{"sha": "abcdef1234",
+                        "commit": {"message": "feat: something\n\nbody",
+                                   "committer": {"date": "2026-10-01T00:00:00Z"}}}]
+        elif "api.github.com" in url and "tags" in url:
+            payload = [{"name": "0.2.1-rc.2"}]
+        elif "data.jsdelivr.com" in url:
+            payload = {"tags": {"0.2.1-rc.2": "sha"}}
+        elif "registry" in url:
+            payload = {"dist-tags": {"latest": npm_version},
+                       "versions": {npm_version: {"engines": {"node": ">=22"}},
+                                    "0.2.0-rc.1": {}}}
+        else:
+            raise AssertionError(f"未预期的 URL：{url}")
+        return json.dumps(payload).encode("utf-8")
+    return fake_http_get
+
+
+def test_fetch_official_versions_merges_sources(monkeypatch):
+    """GitHub metadata + npm metadata 并发抓取后要能合并成旧结构。"""
+    monkeypatch.setattr(core, "http_get", _fake_http_get_router())
+    # 这个测试要检查所有数据都合并进来：关掉「必需项到齐就提前返回」的优化，
+    # 否则可选项（最近提交 / tags）可能还没来得及写进结果。
+    original_probe = core._parallel_probe
+    monkeypatch.setattr(core, "_parallel_probe",
+                        lambda candidates, budget, required=None:
+                            original_probe(candidates, budget, required=None))
+    out = core.fetch_official_versions(fresh=True)
+    assert out["github"]["version"] == "0.2.1-rc.2"
+    assert out["github"]["engines_node"] == ">=22"
+    assert out["npm"]["version"] == "0.2.0-rc.2"
+    assert out["npm"]["engines_node"] == ">=22"
+    assert "0.2.1-rc.2" in out["github"]["tags"]
+    assert "0.2.0-rc.2" in out["npm"]["versions"]
+    assert out["github"]["recent"], "最近提交应被解析出来"
+    assert out["github"]["recent"][0]["sha"] == "abcdef12"
+
+
+def test_fetch_official_versions_cache_hit_skips_network(monkeypatch):
+    """5 分钟内的完整缓存必须零网络直接返回（这正是「检测秒回」的关键）。"""
+    core.save_official_cache(_official_sample())
+    calls = []
+
+    def boom(*args, **kwargs):
+        calls.append(args)
+        raise AssertionError("缓存命中时不应该联网")
+
+    monkeypatch.setattr(core, "http_get", boom)
+    out = core.fetch_official_versions()
+    assert out["npm"]["version"] == "0.2.0-rc.2"
+    assert out["github"]["version"] == "0.2.1-rc.2"
+    assert calls == []
+
+
+def test_fetch_official_versions_returns_cache_copy(monkeypatch):
+    """缓存返回必须是副本：调用方加了 assess 字段也不该污染下次结果。"""
+    core.save_official_cache(_official_sample())
+    monkeypatch.setattr(core, "http_get",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("不应联网")))
+    first = core.fetch_official_versions()
+    first["github"]["version"] = "tampered"
+    first["github"]["assess"] = {"grade": "stable"}
+    second = core.fetch_official_versions()
+    assert second["github"]["version"] == "0.2.1-rc.2"
+    assert "assess" not in second["github"]
+
+
+def test_fetch_official_versions_fresh_bypasses_cache(monkeypatch):
+    core.save_official_cache(_official_sample(npm_version="0.1.0"))
+    monkeypatch.setattr(core, "http_get",
+                        _fake_http_get_router(npm_version="0.2.0-rc.2"))
+    out = core.fetch_official_versions(fresh=True)
+    assert out["npm"]["version"] == "0.2.0-rc.2"
+
+
+def test_incomplete_cache_expires_after_short_ttl(monkeypatch):
+    """抓取失败（两个关键版本号缺一个）时缓存只保留 30 秒，别把失败锁 5 分钟。"""
+    import datetime as _dt
+
+    incomplete = core._empty_official()
+    core.save_official_cache(incomplete)
+    calls = []
+
+    def fake(url, timeout=25.0, binary=False, headers=None):
+        calls.append(url)
+        raise AssertionError("新鲜缓存不应联网")
+
+    monkeypatch.setattr(core, "http_get", fake)
+    core.fetch_official_versions()
+    assert calls == []
+
+    old = (_dt.datetime.now() - _dt.timedelta(seconds=core.OFFICIAL_FAIL_TTL + 5)
+           ).isoformat(timespec="seconds")
+    core.save_official_cache(incomplete, saved_at=old)
+    monkeypatch.setattr(core, "http_get", _fake_http_get_router(seen=calls))
+    out = core.fetch_official_versions()
+    assert calls, "不完整缓存超过 OFFICIAL_FAIL_TTL 后必须重新抓取"
+    assert out["npm"]["version"] == "0.2.0-rc.2"
+
+
+def test_complete_cache_survives_fail_ttl(monkeypatch):
+    """完整缓存 1 分钟内仍然有效（失败 TTL 不能误伤正常结果）。"""
+    import datetime as _dt
+
+    stamp = (_dt.datetime.now() - _dt.timedelta(seconds=60)).isoformat(timespec="seconds")
+    core.save_official_cache(_official_sample(), saved_at=stamp)
+    monkeypatch.setattr(core, "http_get",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("不应联网")))
+    out = core.fetch_official_versions()
+    assert out["github"]["version"] == "0.2.1-rc.2"
+
+
+def test_merge_keeps_stale_lists_but_never_stale_version():
+    """旧缓存只能兜底 tags/versions 清单，不能冒充 latest 版本（否则会误报已是最新）。"""
+    previous = _official_sample()
+    out = core._merge_official({}, previous)
+    assert out["github"]["tags"] == previous["github"]["tags"]
+    assert out["npm"]["versions"] == previous["npm"]["versions"]
+    assert out["github"]["version"] is None
+    assert out["npm"]["version"] is None
+    assert out["github"]["error"], "所有源都失败时要留下原因"
+    assert out["npm"]["error"]
+
+
+def test_parallel_probe_runs_candidates_concurrently():
+    import time as _time
+
+    def make(delay, value):
+        def fn():
+            _time.sleep(delay)
+            return value
+        return fn
+
+    started = _time.perf_counter()
+    parts = core._parallel_probe(
+        {"a": [make(0.25, "A")], "b": [make(0.25, "B")], "c": [make(0.25, "C")]},
+        budget=3.0,
+    )
+    elapsed = _time.perf_counter() - started
+    assert parts == {"a": "A", "b": "B", "c": "C"}
+    assert elapsed < 0.6, f"三个 0.25s 请求应并发（实际 {elapsed:.2f}s，串行要 0.75s）"
+
+
+def test_parallel_probe_exits_when_required_satisfied():
+    """必需信息到齐就返回，不为可选项（如 GitHub「最近提交」）干等超时。"""
+    import time as _time
+
+    def slow_optional():
+        _time.sleep(2.0)
+        return "late"
+
+    started = _time.perf_counter()
+    parts = core._parallel_probe(
+        {"must": [lambda: "ok"], "optional": [slow_optional]},
+        budget=5.0, required=[{"must"}],
+    )
+    elapsed = _time.perf_counter() - started
+    assert parts["must"] == "ok"
+    assert elapsed < 1.0, f"必需项到齐应立即返回（实际 {elapsed:.2f}s）"
+
+
+def test_parallel_probe_required_alternative_group():
+    """required 每组「任一 key 成功」即可，方便表达「npm 两个通道取其一」。"""
+    def boom():
+        raise RuntimeError("down")
+
+    parts = core._parallel_probe(
+        {"a": [boom], "b": [lambda: "B"], "c": [boom]},
+        budget=2.0, required=[{"a", "b"}],
+    )
+    assert parts["b"] == "B"
+
+
+def test_probe_npm_latest_parses_engines(monkeypatch):
+    monkeypatch.setattr(
+        core, "http_get",
+        lambda url, timeout=25.0, binary=False, headers=None:
+            json.dumps({"version": "1.2.3", "engines": {"node": ">=22"}}).encode())
+    probe = core._probe_npm_latest("https://registry.npmjs.org/@deepseek-ai/dsh/latest")
+    assert probe["version"] == "1.2.3"
+    assert probe["engines_node"] == ">=22"
+
+
+def test_probe_gh_tags_supports_jsdelivr_dict(monkeypatch):
+    """jsDelivr 的 tags 是 {tag: sha} 字典，api.github.com 的则是 [{name}] 列表。"""
+    monkeypatch.setattr(
+        core, "http_get",
+        lambda url, timeout=25.0, binary=False, headers=None:
+            json.dumps({"tags": {"v1.2.3": "sha", "dsh-v0.9.0": "sha"}}).encode())
+    assert core._probe_gh_tags("https://data.jsdelivr.com/v1/package/gh/x/y") == [
+        "v1.2.3", "0.9.0"]
+
+
+def test_fetch_self_latest_uses_cache(monkeypatch):
+    """更新器自身版本检查也缓存 5 分钟：重复点「版本」不再打 GitHub API。"""
+    calls = []
+
+    def fake(url, timeout=20):
+        calls.append(url)
+        return [{"tag_name": "v0.9.0", "published_at": "2026-10-01T00:00:00Z",
+                 "html_url": "https://example.com/rel"}]
+
+    monkeypatch.setattr(core, "http_get_json", fake)
+    first = core.fetch_self_latest("0.8.0")
+    assert first["ok"] is True and first["has_update"] is True
+    for _ in range(2):
+        again = core.fetch_self_latest("0.8.0")
+        assert again["latest"] == "0.9.0"
+    assert len(calls) == 1, "缓存命中后不应重复请求 GitHub"
+    forced = core.fetch_self_latest("0.8.0", fresh=True)
+    assert forced["latest"] == "0.9.0"
+    assert len(calls) == 2, "fresh=True 必须跳过缓存"
+
+
+def test_cli_detect_accepts_fresh_flag(monkeypatch, capsys):
+    seen = {}
+
+    def fake_detect(**kwargs):
+        seen.update(kwargs)
+        return {"installs": [], "official": None, "errors": []}
+
+    monkeypatch.setattr(core, "detect_all", fake_detect)
+    code = core._cli_main(["detect", "--fresh"])
+    payload = json.loads(capsys.readouterr().out.strip())
+    assert code == 0 and payload["ok"] is True
+    assert seen.get("fresh") is True
+

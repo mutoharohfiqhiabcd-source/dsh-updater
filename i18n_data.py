@@ -346,3 +346,28 @@ TABLES["ko"].update({
     "用法：--json rollback-npm <版本号>": "사용법: --json rollback-npm <버전>",
     "未知动作：{p1}": "알 수 없는 동작: {p1}",
 })
+
+
+# ---------------------------------------------------------------------------
+# 官方版本「多源并发抓取」的失败提示
+# 只有在所有候选源（含镜像）都失败时才会显示，属于罕见情况。
+# ---------------------------------------------------------------------------
+TABLES["zh-TW"].update({
+    "所有 GitHub 源均不可达": "所有 GitHub 來源皆無法連線",
+    "所有 npm 源均不可达": "所有 npm 來源皆無法連線",
+})
+
+TABLES["en"].update({
+    "所有 GitHub 源均不可达": "All GitHub sources are unreachable",
+    "所有 npm 源均不可达": "All npm sources are unreachable",
+})
+
+TABLES["ja"].update({
+    "所有 GitHub 源均不可达": "どの GitHub ソースにも接続できません",
+    "所有 npm 源均不可达": "どの npm ソースにも接続できません",
+})
+
+TABLES["ko"].update({
+    "所有 GitHub 源均不可达": "모든 GitHub 소스에 연결할 수 없습니다",
+    "所有 npm 源均不可达": "모든 npm 소스에 연결할 수 없습니다",
+})

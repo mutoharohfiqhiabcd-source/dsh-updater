@@ -13,6 +13,7 @@ updater_core.py —— DeepSeek Harness 自动检测与更新器（纯逻辑层�
 """
 from __future__ import annotations
 
+import copy
 import datetime
 import json
 import os
@@ -21,6 +22,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.request
 import zipfile
@@ -77,19 +79,26 @@ _NPM_GLOBAL_FALLBACKS = (
 # ---------------------------------------------------------------------------
 # 网络小工具
 # ---------------------------------------------------------------------------
-def http_get(url: str, timeout: float = 25.0, binary: bool = False) -> bytes:
-    """GET 并返回原始字节；失败抛 RuntimeError。"""
-    req = urllib.request.Request(url, headers=UA)
+def http_get(url: str, timeout: float = 25.0, binary: bool = False,
+             headers: dict | None = None) -> bytes:
+    """GET 并返回原始字节；失败抛异常。
+
+    headers 用来覆盖默认 UA / 附加 Accept 等（例如 npm 包元数据的精简格式）。
+    """
+    merged = dict(UA)
+    if headers:
+        merged.update(headers)
+    req = urllib.request.Request(url, headers=merged)
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.read()
 
 
-def http_get_json(url: str, timeout: float = 25.0):
-    return json.loads(http_get(url, timeout=timeout).decode("utf-8", "replace"))
+def http_get_json(url: str, timeout: float = 25.0, headers: dict | None = None):
+    return json.loads(http_get(url, timeout=timeout, headers=headers).decode("utf-8", "replace"))
 
 
-def http_get_text(url: str, timeout: float = 25.0) -> str:
-    return http_get(url, timeout=timeout).decode("utf-8", "replace")
+def http_get_text(url: str, timeout: float = 25.0, headers: dict | None = None) -> str:
+    return http_get(url, timeout=timeout, headers=headers).decode("utf-8", "replace")
 
 
 def _parse_package_version(text: str) -> str:
@@ -252,7 +261,15 @@ def assess_version(version: str, official: dict | None, kind_for_ref: str = "npm
     }
 
 
+_LOCAL_NODE_VERSION: str | None = None
+
+
 def _local_node_version() -> str:
+    """本机 Node 版本；进程内缓存（一次检测会把每个安装各评估一遍，别重复起进程）。"""
+    global _LOCAL_NODE_VERSION
+    if _LOCAL_NODE_VERSION is not None:
+        return _LOCAL_NODE_VERSION
+    version = ""
     try:
         for exe in ("node", "node.exe"):
             p = shutil.which(exe)
@@ -260,52 +277,166 @@ def _local_node_version() -> str:
                 r = subprocess.run([p, "--version"], capture_output=True, text=True, timeout=10,
                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
                 if r.returncode == 0:
-                    return (r.stdout or "").strip().lstrip("v")
+                    version = (r.stdout or "").strip().lstrip("v")
+                    break
     except Exception:  # noqa: BLE001
         pass
-    return ""
+    _LOCAL_NODE_VERSION = version
+    return version
 
 
 # ---------------------------------------------------------------------------
-# 官方版本
+# 官方版本：多源并发抓取
 # ---------------------------------------------------------------------------
-def _fetch_npm_versions() -> list:
-    """通过 `npm view` 取官方发布过的全部版本号；失败返回空。"""
-    for exe in ("npm", "npm.cmd"):
-        p = shutil.which(exe)
-        if not p:
-            continue
-        try:
-            r = subprocess.run(
-                [p, "view", "@deepseek-ai/dsh", "versions", "--json"],
-                capture_output=True, text=True, timeout=40,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
-            if r.returncode == 0 and r.stdout.strip():
-                v = json.loads(r.stdout)
-                if isinstance(v, list):
-                    return [str(x) for x in v]
-        except Exception:  # noqa: BLE001
-            pass
-    return []
+# 背景：从国内直连 GitHub API / npm registry 时，TLS 握手会被随机卡住——
+# 实测**同一个 URL** 一次 1~4s 成功、一次 25s 超时失败。旧实现串行请求 7 个地址，
+# 最坏要等 7 次超时（实测整次检测 90s+）。现在改成：
+#   1. 同一份数据准备多个来源/多次尝试，全部**并发**发出，谁先成功用谁；
+#   2. 单个请求短超时（5s），整轮抓取最多等 OFFICIAL_FETCH_BUDGET 秒；
+#   3. 抓到的结果写本地缓存，5 分钟内重复检测不再联网（见 fetch_official_versions）。
+OFFICIAL_CACHE_TTL = 300.0      # 官方版本结果缓存有效期（秒）
+OFFICIAL_FAIL_TTL = 30.0        # 抓取不完整（某个源全灭）时的缓存有效期（秒）
+OFFICIAL_FETCH_BUDGET = 8.0     # 一轮抓取最多等多久（秒）
+_PROBE_TIMEOUT = 5.0            # 单个候选请求的超时（秒）
+
+# 候选地址：官方源在前，镜像兜底；重复条目＝并发重试（对冲 TLS 握手被卡）。
+# 实测同一条链路会随机「握手卡 5s 超时」，所以宁可多开几个并发连接，也别串行重试。
+_RAW_ALT_URL = (
+    f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/raw/{GITHUB_BRANCH}/package.json"
+)
+# jsDelivr 是 GitHub 的只读 CDN 镜像：内容只会「比 GitHub 旧」（缓存），绝不会更新，
+# 所以它只可能让我们晚一个版本发现更新，不会误报「可更新」——作为兜底是安全的。
+_JSDELIVR_MANIFEST = (
+    f"https://cdn.jsdelivr.net/gh/{GITHUB_OWNER}/{GITHUB_REPO}@{GITHUB_BRANCH}/package.json",
+    f"https://gcore.jsdelivr.net/gh/{GITHUB_OWNER}/{GITHUB_REPO}@{GITHUB_BRANCH}/package.json",
+)
+_GITHUB_MANIFEST_PROBES = (
+    RAW_PACKAGE_URL, _RAW_ALT_URL, _JSDELIVR_MANIFEST[0],
+    RAW_PACKAGE_URL, _JSDELIVR_MANIFEST[1], _RAW_ALT_URL,
+)
+_NPM_TAGS_PROBES = (
+    "https://registry.npmjs.org/-/package/@deepseek-ai/dsh/dist-tags",
+    "https://registry.npmmirror.com/-/package/@deepseek-ai/dsh/dist-tags",
+    NPM_LATEST_URL,
+    "https://registry.npmmirror.com/@deepseek-ai/dsh/latest",
+)
+_NPM_PACKUMENT_PROBES = (
+    "https://registry.npmjs.org/@deepseek-ai/dsh",
+    "https://registry.npmmirror.com/@deepseek-ai/dsh",
+    "https://registry.npmjs.org/@deepseek-ai/dsh",
+)
+_GH_COMMITS_PROBES = (
+    f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/commits?per_page=6",
+)
+_GH_TAGS_PROBES = (
+    f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/tags?per_page=100",
+    f"https://data.jsdelivr.com/v1/package/gh/{GITHUB_OWNER}/{GITHUB_REPO}",
+)
+_NPM_ABBREVIATED_ACCEPT = {"Accept": "application/vnd.npm.install-v1+json"}
 
 
-def _fetch_gh_tag_versions() -> list:
-    """取官方 GitHub tags（dsh-v* 形式），返回纯版本号列表。"""
+def _probe_github_manifest(url: str) -> dict:
+    """GitHub master 的 package.json → 官方源码版版本号与 engines。"""
+    data = http_get_json(url, timeout=_PROBE_TIMEOUT)
+    if not isinstance(data, dict):
+        raise ValueError("manifest 不是 JSON 对象")
+    version = str(data.get("version") or "").strip()
+    if not version:
+        raise ValueError("manifest 缺少 version")
+    return {"version": version, "engines_node": (data.get("engines") or {}).get("node")}
+
+
+def _probe_npm_tags(url: str) -> dict:
+    """npm dist-tags（体积最小的接口）→ latest 版本。"""
+    data = http_get_json(url, timeout=_PROBE_TIMEOUT)
+    tags = {str(k): str(v) for k, v in (data or {}).items()} if isinstance(data, dict) else {}
+    if not tags.get("latest"):
+        raise ValueError("dist-tags 缺少 latest")
+    return {"version": tags["latest"], "dist_tags": tags}
+
+
+def _probe_npm_latest(url: str) -> dict:
+    """npm 单版本接口（@deepseek-ai/dsh/latest）→ latest 版本 + engines。"""
+    data = http_get_json(url, timeout=_PROBE_TIMEOUT)
+    if not isinstance(data, dict):
+        raise ValueError("latest 不是 JSON 对象")
+    version = str(data.get("version") or "").strip()
+    if not version:
+        raise ValueError("latest 缺少 version")
+    return {"version": version, "engines_node": (data.get("engines") or {}).get("node")}
+
+
+def _probe_npm_version_channel(url: str) -> dict:
+    """npm 版本通道：dist-tags 与 latest 两个小接口，谁先回用谁（都只产出版本号）。"""
+    if url.rstrip("/").endswith("/latest"):
+        return _probe_npm_latest(url)
+    return _probe_npm_tags(url)
+
+
+def _probe_npm_packument(url: str) -> dict:
+    """npm 包元数据（abbreviated）→ 全部发布版本 + dist-tags + engines。
+
+    用 Accept: application/vnd.npm.install-v1+json 取精简包元数据（本项目约 20 万字节），
+    比 `npm view` 子进程（实测 33s，还要等 Node 启动）快得多，也不再依赖本机装没装 npm。
+    """
+    data = http_get_json(url, timeout=_PROBE_TIMEOUT, headers=_NPM_ABBREVIATED_ACCEPT)
+    if not isinstance(data, dict):
+        raise ValueError("packument 不是 JSON 对象")
+    raw_tags = data.get("dist-tags") or {}
+    tags = {str(k): str(v) for k, v in raw_tags.items()} if isinstance(raw_tags, dict) else {}
+    versions_meta = data.get("versions") or {}
+    versions = [str(v) for v in versions_meta] if isinstance(versions_meta, dict) else []
+    if not tags.get("latest") and not versions:
+        raise ValueError("packument 为空")
+    latest = tags.get("latest") or ""
+    engines_node = None
+    latest_meta = versions_meta.get(latest) if isinstance(versions_meta, dict) else None
+    if isinstance(latest_meta, dict):
+        engines_node = (latest_meta.get("engines") or {}).get("node")
+    return {"version": latest, "dist_tags": tags, "versions": versions,
+            "engines_node": engines_node}
+
+
+def _probe_gh_commits(url: str) -> dict:
+    """最近提交 → 最新 commit 与日期（用于「最近更新」展示）。"""
+    items = http_get_json(url, timeout=_PROBE_TIMEOUT)
+    if not isinstance(items, list) or not items:
+        raise ValueError("commits 为空")
+    recent = []
+    for c in items:
+        commit = c.get("commit") or {}
+        message = commit.get("message") or ""
+        first = message.splitlines()[0].strip()[:110] if message else ""
+        date = (commit.get("committer") or {}).get("date") or ""
+        recent.append({"sha": str(c.get("sha", ""))[:8], "msg": first, "date": date[:10]})
+    top = items[0]
+    return {"commit": str(top.get("sha", ""))[:10],
+            "date": ((top.get("commit") or {}).get("committer") or {}).get("date"),
+            "recent": recent}
+
+
+def _probe_gh_tags(url: str) -> list:
+    """官方发布过的 tag 版本（api.github.com 或 jsDelivr 数据 API）。"""
+    data = http_get_json(url, timeout=_PROBE_TIMEOUT)
+    raw_names: list = []
+    if isinstance(data, list):          # api.github.com/repos/.../tags
+        raw_names = [str(item.get("name", "")) for item in data if isinstance(item, dict)]
+    elif isinstance(data, dict):        # data.jsdelivr.com/v1/package/gh/...
+        tags = data.get("tags")
+        if isinstance(tags, dict):
+            raw_names = [str(k) for k in tags]
+        elif isinstance(tags, list):
+            raw_names = [str(x) for x in tags]
+        if not raw_names:
+            raw_names = [str(x) for x in (data.get("versions") or [])]
     out = []
-    try:
-        tags = http_get_json(
-            f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/tags?per_page=100",
-            timeout=20,
-        )
-        for t in tags:
-            name = str(t.get("name", ""))
-            if name.startswith("dsh-v"):
-                name = name[len("dsh-v"):]
-            if name:
-                out.append(name)
-    except Exception:  # noqa: BLE001
-        pass
+    for name in raw_names:
+        if name.startswith("dsh-v"):
+            name = name[len("dsh-v"):]
+        if name:
+            out.append(name)
+    if not out:
+        raise ValueError("tags 为空")
     return out
 
 
@@ -365,77 +496,212 @@ def _match_node_range(version: str, ranges: str | None):
     return False
 
 
-def fetch_official_versions() -> dict:
-    """
-    返回形如：
-      {
-        "github": {"ok": bool, "version": str|None, "commit": str|None,
-                    "date": str|None, "error": str|None,
-                    "tags": [...], "engines_node": str|None, "recent": [...]},
-        "npm":    {"ok": bool, "version": str|None, "dist_tags": {...},
-                    "versions": [...], "engines_node": str|None, "error": str|None},
-      }
-    """
-    out = {
-        "github": {"ok": False, "version": None, "commit": None, "date": None, "error": None,
-                   "tags": [], "engines_node": None, "recent": []},
+def _empty_official() -> dict:
+    """官方版本信息骨架（字段与旧版保持一致，界面/测试都依赖这些键）。"""
+    return {
+        "github": {"ok": False, "version": None, "commit": None, "date": None,
+                   "error": None, "tags": [], "engines_node": None, "recent": []},
         "npm": {"ok": False, "version": None, "dist_tags": {}, "versions": [],
                 "engines_node": None, "error": None},
     }
-    # GitHub master package.json（含 engines）
-    try:
-        text = http_get_text(RAW_PACKAGE_URL, timeout=25)
-        data = json.loads(text)
-        out["github"]["version"] = data.get("version") or _parse_package_version(text)
-        out["github"]["engines_node"] = (data.get("engines") or {}).get("node")
-        out["github"]["ok"] = bool(out["github"]["version"])
-    except Exception as e:  # noqa: BLE001
-        out["github"]["error"] = str(e)
-    # GitHub 最近一次提交（显示更新时间）
-    if out["github"]["ok"]:
+
+
+def _parallel_probe(candidates: dict, budget: float,
+                    required: list | None = None) -> dict:
+    """并发执行候选抓取，每个 key 取第一个成功结果。
+
+    candidates: {key: [无参函数, ...]}；函数成功返回值、失败抛异常。
+    required:  「必需信息」的满足条件，形如 [{"gh_manifest"}, {"a", "b"}]——
+               每个集合里任意一个 key 有结果即算满足；全部条件满足就提前返回，
+               不必干等可选项（例如 GitHub 的「最近提交」接口）超时。
+    返回 {key: value 或 None}，总等待不超过 budget 秒。
+    没跑完的请求是守护线程：函数返回后它们自行结束，不会拖住进程退出
+    （旧实现每个请求都阻塞到超时，这是「点一次检测要等 90 秒」的病根）。
+    """
+    needed = [set(group) for group in (required or [])]
+
+    def satisfied() -> bool:
+        return all(any(key in results for key in group) for group in needed)
+
+    lock = threading.Lock()
+    results: dict = {}
+    failures = {key: 0 for key in candidates}
+    remaining = set(candidates)
+    finished = threading.Event()
+
+    def runner(key, fn):
         try:
-            commit = http_get_json(API_COMMIT_URL, timeout=20)
-            out["github"]["commit"] = str(commit.get("sha", ""))[:10]
-            out["github"]["date"] = (commit.get("commit", {}).get("committer", {}) or {}).get("date")
+            value = fn()
+            ok = True
         except Exception:  # noqa: BLE001
-            pass
-    # npm registry 发布版（dist-tags 优先，其次 latest 单点）
+            value, ok = None, False
+        with lock:
+            if ok:
+                if key not in results:
+                    results[key] = value
+                remaining.discard(key)
+            else:
+                failures[key] += 1
+                if key not in results and failures[key] >= len(candidates[key]):
+                    results[key] = None
+                    remaining.discard(key)
+            if not remaining or (needed and satisfied()):
+                finished.set()
+
+    for key, fns in candidates.items():
+        for fn in fns:
+            threading.Thread(target=runner, args=(key, fn), daemon=True,
+                             name=f"dshu-probe-{key}").start()
+    finished.wait(budget)
+    with lock:
+        return {key: results.get(key) for key in candidates}
+
+
+def _merge_official(parts: dict, previous: dict | None = None) -> dict:
+    """把各数据源的抓取结果合并成旧版 fetch_official_versions 的结构。
+
+    previous 是上一次缓存的结果：只有 tags / versions 这类「历史清单」允许在
+    抓取失败时沿用旧值（它们只影响分级展示）；latest 版本必须来自本轮抓取，
+    拿不到就如实报告失败，绝不拿旧值假装「已是最新」。
+    """
+    out = _empty_official()
+    prev = previous if isinstance(previous, dict) else {}
+    prev_gh = prev.get("github") or {}
+    prev_npm = prev.get("npm") or {}
+
+    # —— GitHub master package.json ——
+    gh = out["github"]
+    manifest = parts.get("gh_manifest")
+    if isinstance(manifest, dict) and manifest.get("version"):
+        gh["version"] = str(manifest["version"])
+        gh["engines_node"] = manifest.get("engines_node")
+        gh["ok"] = True
+    else:
+        gh["error"] = t("所有 GitHub 源均不可达")
+
+    # —— 最近提交（可选，失败不影响「是否有更新」判断）——
+    commits = parts.get("gh_commits")
+    if isinstance(commits, dict) and commits.get("recent"):
+        gh["recent"] = commits["recent"]
+        gh["commit"] = commits.get("commit")
+        gh["date"] = commits.get("date")
+
+    # —— GitHub tags：失败沿用旧清单 ——
+    tags = parts.get("gh_tags")
+    if isinstance(tags, list) and tags:
+        gh["tags"] = [str(x) for x in tags]
+    else:
+        gh["tags"] = [str(x) for x in (prev_gh.get("tags") or [])]
+
+    # —— npm ——
+    npm = out["npm"]
+    packument = parts.get("npm_packument") if isinstance(parts.get("npm_packument"), dict) else {}
+    tags_view = parts.get("npm_tags") if isinstance(parts.get("npm_tags"), dict) else {}
+    dist_tags: dict = {}
+    if packument.get("dist_tags"):
+        dist_tags.update({str(k): str(v) for k, v in packument["dist_tags"].items()})
+    if tags_view.get("dist_tags"):
+        dist_tags.update({str(k): str(v) for k, v in tags_view["dist_tags"].items()})
+    npm["dist_tags"] = dist_tags
+    versions = [str(x) for x in (packument.get("versions") or [])]
+    if not versions:
+        versions = [str(x) for x in (prev_npm.get("versions") or [])]
+    npm["versions"] = versions
+    npm["version"] = (dist_tags.get("latest")
+                      or tags_view.get("version")
+                      or packument.get("version") or None)
+    npm["ok"] = bool(npm["version"])
+    npm["engines_node"] = packument.get("engines_node") or tags_view.get("engines_node")
+    if not npm["ok"]:
+        npm["error"] = t("所有 npm 源均不可达")
+    # npm 未单独声明 engines 时回退官方仓库 master 的 engines（同一项目）
+    if not npm["engines_node"]:
+        npm["engines_node"] = gh.get("engines_node")
+    return out
+
+
+def official_cache_file() -> Path:
+    """官方版本缓存文件（与设置文件同目录，测试/便携模式可用环境变量覆盖）。"""
+    return _settings_dir() / "official-cache.json"
+
+
+def load_official_cache() -> dict:
+    """读取官方版本缓存，返回 {"saved_at": str, "data": dict}；损坏时返回 {}。"""
+    data = _read_json(official_cache_file())
+    return data if isinstance(data, dict) else {}
+
+
+def _cache_age_seconds(entry: dict) -> float | None:
+    """缓存写入至今的秒数；时间戳解析失败返回 None。"""
     try:
-        tags_json = http_get_json(
-            "https://registry.npmjs.org/-/package/@deepseek-ai/dsh/dist-tags", timeout=20
-        )
-        out["npm"]["dist_tags"] = {str(k): str(v) for k, v in (tags_json or {}).items()}
-        out["npm"]["version"] = out["npm"]["dist_tags"].get("latest")
-        out["npm"]["ok"] = bool(out["npm"]["version"])
-    except Exception as e:  # noqa: BLE001
-        out["npm"]["error"] = str(e)
-        try:
-            data = http_get_json(NPM_LATEST_URL, timeout=25)
-            out["npm"]["version"] = data.get("version")
-            out["npm"]["engines_node"] = (data.get("engines") or {}).get("node")
-            out["npm"]["ok"] = bool(out["npm"]["version"])
-        except Exception as e2:  # noqa: BLE001
-            out["npm"]["error"] = f"{e}; {e2}"
-    # 官方近期提交（用于“更新了些什么”提示）
-    try:
-        commits = http_get_json(
-            f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/commits?per_page=6",
-            timeout=20,
-        )
-        out["github"]["recent"] = []
-        for c in commits:
-            cm = (c.get("commit") or {}).get("message") or ""
-            first = cm.splitlines()[0].strip()[:110] if cm else ""
-            date = ((c.get("commit") or {}).get("committer") or {}).get("date") or ""
-            out["github"]["recent"].append({"sha": str(c.get("sha", ""))[:8], "msg": first, "date": date[:10]})
+        saved = datetime.datetime.fromisoformat(str(entry.get("saved_at") or ""))
     except Exception:  # noqa: BLE001
-        out["github"]["recent"] = []
-    # 官方发布版本全集：GH tags + npm 全版本
-    out["github"]["tags"] = _fetch_gh_tag_versions()
-    out["npm"]["versions"] = _fetch_npm_versions()
-    # npm 若未单独声明 engines，回退用官方仓库 master 的 engines（同一项目）
-    if not out["npm"].get("engines_node"):
-        out["npm"]["engines_node"] = out["github"].get("engines_node")
+        return None
+    return max(0.0, (datetime.datetime.now() - saved).total_seconds())
+
+
+def save_official_cache(data: dict, saved_at: str | None = None) -> str:
+    """写入官方版本缓存，返回写入的时间戳；失败返回空串（不抛异常）。"""
+    stamp = saved_at or datetime.datetime.now().isoformat(timespec="seconds")
+    try:
+        target = official_cache_file()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_name(target.name + ".tmp")
+        tmp.write_text(json.dumps({"saved_at": stamp, "data": data},
+                                  ensure_ascii=False, default=str), encoding="utf-8")
+        os.replace(tmp, target)
+        return stamp
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _official_is_complete(data: dict) -> bool:
+    """两条关键信息（GitHub master 版本、npm latest）都拿到了才算完整。
+
+    抓取不完整（比如网络整段断掉）时缓存只保留 30 秒，避免一次失败把
+    之后 5 分钟的「检测」都锁死在错误结果上。
+    """
+    if not isinstance(data, dict):
+        return False
+    gh = data.get("github") if isinstance(data.get("github"), dict) else {}
+    npm = data.get("npm") if isinstance(data.get("npm"), dict) else {}
+    return bool((gh or {}).get("version") and (npm or {}).get("version"))
+
+
+def fetch_official_versions(fresh: bool = False) -> dict:
+    """
+    获取官方最新版本信息（GitHub master + npm），5 分钟内重复调用直接吃缓存。
+
+    返回结构见 _empty_official()：
+      github: ok/version/commit/date/error/tags/engines_node/recent
+      npm:    ok/version/dist_tags/versions/engines_node/error
+    fresh=True 强制重新联网抓取（发布验证等场景用）。
+    """
+    cache = load_official_cache()
+    age = _cache_age_seconds(cache) if cache else None
+    previous = cache.get("data") if isinstance(cache.get("data"), dict) else None
+    if not fresh and age is not None and previous is not None:
+        ttl = OFFICIAL_CACHE_TTL if _official_is_complete(previous) else OFFICIAL_FAIL_TTL
+        if age <= ttl:
+            return copy.deepcopy(previous)
+    candidates = {
+        "gh_manifest": [lambda url=u: _probe_github_manifest(url)
+                        for u in _GITHUB_MANIFEST_PROBES],
+        "npm_tags": [lambda url=u: _probe_npm_version_channel(url)
+                     for u in _NPM_TAGS_PROBES],
+        "npm_packument": [lambda url=u: _probe_npm_packument(url)
+                          for u in _NPM_PACKUMENT_PROBES],
+        "gh_commits": [lambda url=u: _probe_gh_commits(url) for u in _GH_COMMITS_PROBES],
+        "gh_tags": [lambda url=u: _probe_gh_tags(url) for u in _GH_TAGS_PROBES],
+    }
+    parts = _parallel_probe(
+        candidates, OFFICIAL_FETCH_BUDGET,
+        # 只要拿到「GitHub master 版本」和「任一 npm 版本通道」，UI 就能判断有没有更新；
+        # 「最近提交 / tags 清单」只是展示细节，不该让它们把检测拖到超时。
+        required=[{"gh_manifest"}, {"npm_tags", "npm_packument"}],
+    )
+    out = _merge_official(parts, previous)
+    save_official_cache(out)
     return out
 
 
@@ -468,9 +734,48 @@ def _pick_self_latest(releases: list) -> dict | None:
     }
 
 
-def fetch_self_latest(current_version: str = "") -> dict:
+SELF_CACHE_TTL = 300.0
+
+
+def _self_cache_file() -> Path:
+    """「更新器自身最新发布」缓存文件（与设置文件同目录）。"""
+    return _settings_dir() / "self-cache.json"
+
+
+def _read_self_cache(fresh: bool) -> dict:
+    """读取远端最新发布缓存；只缓存候选本身，是否更新的判断每次都现算。"""
+    if fresh:
+        return {}
+    data = _read_json(_self_cache_file())
+    if not isinstance(data, dict):
+        return {}
+    candidate = data.get("candidate")
+    if not isinstance(candidate, dict) or not candidate.get("tag"):
+        return {}
+    age = _cache_age_seconds(data)
+    if age is None or age > SELF_CACHE_TTL:
+        return {}
+    return candidate
+
+
+def _save_self_cache(candidate: dict) -> None:
+    """写入远端最新发布缓存；失败静默（缓存只是加速，不该影响主流程）。"""
+    try:
+        target = _self_cache_file()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_name(target.name + ".tmp")
+        tmp.write_text(json.dumps(
+            {"saved_at": datetime.datetime.now().isoformat(timespec="seconds"),
+             "candidate": candidate}, ensure_ascii=False, default=str), encoding="utf-8")
+        os.replace(tmp, target)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def fetch_self_latest(current_version: str = "", fresh: bool = False) -> dict:
     """查询本更新器自身在 GitHub 上的最新发布，判断是否需要更新。
 
+    结果缓存 5 分钟（SELF_CACHE_TTL）：重复调用直接吃缓存，不再打 GitHub API。
     返回 dict：
       ok         查询是否成功
       current    当前版本（原样回传）
@@ -489,27 +794,31 @@ def fetch_self_latest(current_version: str = "") -> dict:
         "note": "", "error": "",
     }
 
-    cand = None
-    try:
-        cand = _pick_self_latest(http_get_json(SELF_RELEASES_URL, timeout=20))
-    except Exception as e:  # noqa: BLE001
-        res["error"] = t("无法访问 GitHub Releases 接口：{p1}: {e}", p1=type(e).__name__, e=e)
-
+    cand = _read_self_cache(fresh) or None
     if cand is None:
-        # 退回用 tags（此时没有发布时间，按版本号取最大的那个）
         try:
-            tags = http_get_json(SELF_TAGS_URL, timeout=20)
+            cand = _pick_self_latest(http_get_json(SELF_RELEASES_URL, timeout=_PROBE_TIMEOUT))
         except Exception as e:  # noqa: BLE001
-            res["error"] = res["error"] or t("无法访问 GitHub Tags 接口：{p1}: {e}", p1=type(e).__name__, e=e)
-            tags = None
-        if isinstance(tags, list) and tags:
-            best = max(tags, key=lambda t: version_key(str(t.get("name") or "")))
-            cand = {
-                "tag": str(best.get("name") or "").strip(),
-                "date": "",
-                "url": f"{SELF_REPO_URL}/releases",
-                "source": "tag",
-            }
+            res["error"] = t("无法访问 GitHub Releases 接口：{p1}: {e}", p1=type(e).__name__, e=e)
+
+        if cand is None:
+            # 退回用 tags（此时没有发布时间，按版本号取最大的那个）
+            try:
+                tags = http_get_json(SELF_TAGS_URL, timeout=_PROBE_TIMEOUT)
+            except Exception as e:  # noqa: BLE001
+                res["error"] = res["error"] or t("无法访问 GitHub Tags 接口：{p1}: {e}",
+                                                 p1=type(e).__name__, e=e)
+                tags = None
+            if isinstance(tags, list) and tags:
+                best = max(tags, key=lambda t: version_key(str(t.get("name") or "")))
+                cand = {
+                    "tag": str(best.get("name") or "").strip(),
+                    "date": "",
+                    "url": f"{SELF_REPO_URL}/releases",
+                    "source": "tag",
+                }
+        if cand is not None:
+            _save_self_cache(cand)
 
     if cand is None:
         res["error"] = res["error"] or t("远端没有可用的 Release 或 Tag。")
@@ -772,11 +1081,12 @@ def _dedupe_installs(installs: list) -> dict:
     return {"installs": list(seen.values()), "removed": removed}
 
 
-def detect_all(fetch_official: bool = True) -> dict:
+def detect_all(fetch_official: bool = True, fresh: bool = False) -> dict:
     """检测本机所有 DSH 安装并拉取官方版本。返回 dict。
 
     fetch_official=False 时跳过所有联网请求（界面可以先用本地结果秒开，
     再异步补上官方版本），此时 official 为 None、各安装的 status 为 unknown。
+    fresh=True 时忽略官方版本缓存，强制重新联网抓取。
     """
     result = {"installs": [], "official": None, "errors": [],
               "selfcheck": {"duplicates": 0, "notes": []}}
@@ -826,7 +1136,7 @@ def detect_all(fetch_official: bool = True) -> dict:
         )
 
     # 官方版本（--offline 时整块跳过，一个网络请求都不发）
-    result["official"] = fetch_official_versions() if fetch_official else None
+    result["official"] = fetch_official_versions(fresh=fresh) if fetch_official else None
     off = result["official"] or {}
     official_gh = (off.get("github") or {}).get("version") or ""
     official_npm = (off.get("npm") or {}).get("version") or ""
@@ -2394,9 +2704,9 @@ def _cli_status_code(local: str, ref: str) -> str:
         return "unknown"
 
 
-def _cli_detect(offline: bool = False) -> dict:
+def _cli_detect(offline: bool = False, fresh: bool = False) -> dict:
     """检测结果精简版：只保留界面需要的字段，且不带任何翻译文案。"""
-    raw = detect_all(fetch_official=not offline)
+    raw = detect_all(fetch_official=not offline, fresh=fresh)
     installs = []
     for inst in raw.get("installs", []):
         local = str(inst.get("version") or "")
@@ -2438,11 +2748,11 @@ def _self_version() -> str:
         return ""
 
 
-def _cli_version() -> dict:
+def _cli_version(fresh: bool = False) -> dict:
     """轻量版本信息：本机更新器自身版本 + 官方最新版本（不扫盘）。"""
     return {
-        "updater": fetch_self_latest(_self_version()),
-        "official": fetch_official_versions(),
+        "updater": fetch_self_latest(_self_version(), fresh=fresh),
+        "official": fetch_official_versions(fresh=fresh),
     }
 
 
@@ -2450,18 +2760,20 @@ def _cli_main(argv: list) -> int:
     """`--json <动作>` 入口：始终输出一行 JSON，退出码 0/1。
 
     可选 `--offline`：一个网络请求都不发（本地扫描照常），用于界面秒开。
+    可选 `--fresh`：忽略官方版本缓存，强制重新联网抓取。
     """
     argv = list(argv)
     offline = "--offline" in argv
-    argv = [a for a in argv if a != "--offline"]
+    fresh = "--fresh" in argv
+    argv = [a for a in argv if a not in ("--offline", "--fresh")]
     action = (argv[0] if argv else "").strip() or "detect"
     envelope = {"ok": False, "action": action, "data": None, "error": None, "log": []}
     lines: list = []
     try:
         if action == "detect":
-            envelope["data"] = _cli_detect(offline)
+            envelope["data"] = _cli_detect(offline, fresh=fresh)
         elif action == "version":
-            envelope["data"] = _cli_version()
+            envelope["data"] = _cli_version(fresh=fresh)
         elif action == "rollback-targets":
             envelope["data"] = rollback_targets()
         elif action == "rollback-source":

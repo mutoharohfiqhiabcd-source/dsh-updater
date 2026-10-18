@@ -101,10 +101,14 @@ async function githubLatest(repo, signal) {
   let lastError
   for (let attempt = 0; attempt < 2; attempt += 1) {
     if (attempt > 0) await sleep(900)
+    // 单个请求最多等 8 秒：api.github.com 在部分网络下会一直卡着不返回，
+    // 没有超时的话「版本」面板会一直转圈（fetch 默认继承系统 TCP 超时，可能几分钟）。
+    const timeout = AbortSignal.timeout(8_000)
+    const combined = signal ? AbortSignal.any([signal, timeout]) : timeout
     try {
       const response = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
         headers: { accept: 'application/vnd.github+json', 'user-agent': USER_AGENT },
-        signal,
+        signal: combined,
       })
       if (!response.ok) {
         const body = await response.text().catch(() => '')
