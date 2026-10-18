@@ -114,12 +114,19 @@ Once installed it appears under **Plugins → Installed** in the DSH sidebar and
 gives the model a `dsh_updater` tool (`status` / `latest` / `notes` /
 `download` / `launch`).
 
-**GUI:** sidebar → **Plugins** → **Add plugin** → enter
-`github:mutoharohfiqhiabcd-source/dsh-updater` → **Install**.
+> Package name: `dsh-updater` on npm already belongs to a different, unrelated
+> plugin, so this plugin's **npm package name is `dsh-updater-plugin`**. The
+> repository name and the GitHub install spec are still `dsh-updater`.
 
-**CLI:**
+**GUI:** sidebar → **Plugins** → **Add plugin** → enter either address below → **Install**.
+
+**CLI (either one):**
 
 ```bat
+:: from npm (since v0.9.0)
+dsh plugin --profile web add dsh-updater-plugin
+
+:: or from GitHub (this install spec never changed)
 dsh plugin --profile web add github:mutoharohfiqhiabcd-source/dsh-updater
 ```
 

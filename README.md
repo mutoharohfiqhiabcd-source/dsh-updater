@@ -96,12 +96,18 @@ copy /Y updater_gui.pyw updater_core.py dsh_updater.ico 目标目录\
 装进 DSH 后，侧边栏「**插件 → 已安装**」会出现一张卡片，
 并给模型一个 `dsh_updater` 工具（`status` / `latest` / `notes` / `download` / `launch`）。
 
-**图形界面**：DSH 侧边栏 → **插件** → **添加插件** → 填
-`github:mutoharohfiqhiabcd-source/dsh-updater` → **安装**。
+> 包名说明：npm 上的 `dsh-updater` 已经被别人的同名插件占用，所以本插件的
+> **npm 包名是 `dsh-updater-plugin`**；仓库名与 GitHub 安装地址仍是 `dsh-updater`。
 
-**命令行**：
+**图形界面**：DSH 侧边栏 → **插件** → **添加插件** → 填下面任一地址 → **安装**。
+
+**命令行（两种方式任选）**：
 
 ```bat
+:: 从 npm 安装（v0.9.0 起）
+dsh plugin --profile web add dsh-updater-plugin
+
+:: 或从 GitHub 安装（安装地址一直没变）
 dsh plugin --profile web add github:mutoharohfiqhiabcd-source/dsh-updater
 ```
 

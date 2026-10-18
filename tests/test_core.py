@@ -1027,6 +1027,21 @@ def test_plugin_client_declaration_is_complete():
     assert (REPO_ROOT / manifest["dsh"]["bundle"]["patch"]).is_file()
 
 
+def test_bundle_patch_module_name_matches_package_name():
+    """cordis.patch.yml 里引用的模块名必须等于 package.json 的包名。
+
+    这两个名字对不上时（例如 npm 包改名后漏改 patch），DSH 装完插件不会报错，
+    但 profile 启动时找不到插件模块 —— 按钮和工具都会静默消失。
+    """
+    manifest = _plugin_manifest()
+    patch_path = REPO_ROOT / manifest["dsh"]["bundle"]["patch"]
+    text = patch_path.read_text(encoding="utf-8")
+    names = re.findall(r"^\s*name:\s*(\S+)\s*$", text, re.M)
+    assert names, "cordis.patch.yml 里没找到 name 行"
+    assert manifest["name"] in names, (
+        f"bundle patch 的 name={names} 与 package.json 包名 {manifest['name']} 不一致")
+
+
 def test_checkout_detection_tolerates_utf8_bom(tmp_path):
     """package.json 带 BOM 也要能识别。
 

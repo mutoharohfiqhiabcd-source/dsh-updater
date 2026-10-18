@@ -3,7 +3,7 @@
 # 这一层把「DSH 自动更新器」挂进 profile。安装方式（三选一）：
 #
 #   dsh plugin --profile <name> add github:mutoharohfiqhiabcd-source/dsh-updater
-#   dsh plugin --profile <name> add dsh-updater        # 发布到 npm 之后
+#   dsh plugin --profile <name> add dsh-updater-plugin # 从 npm 安装（v0.9.0 起）
 #   dsh plugin --profile <name> add .                  # 从本仓库目录安装
 #
 # 也可以在 DSH Web 侧边栏 **插件 → 添加插件** 里填上面那个 GitHub 地址。
@@ -17,4 +17,4 @@
 
 - insert:
     - id: dsh-updater
-      name: dsh-updater
+      name: dsh-updater-plugin

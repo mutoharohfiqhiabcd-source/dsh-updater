@@ -26,7 +26,7 @@ import { fileURLToPath } from 'node:url'
 
 import { defineTool } from '@deepseek-ai/dsh-tools'
 
-export const name = 'dsh-updater'
+export const name = 'dsh-updater-plugin'
 export const inject = ['tools']
 
 const DEFAULT_REPO = 'mutoharohfiqhiabcd-source/dsh-updater'
