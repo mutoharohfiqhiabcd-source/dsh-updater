@@ -12,7 +12,7 @@ scan plugins/skills, update in one click, and keep local data safe.
 | Shape | What it is | How to get it |
 | --- | --- | --- |
 | 🖥️ **Desktop app** | Standalone Windows program, no DSH required | [Download the EXE ↗](https://github.com/mutoharohfiqhiabcd-source/dsh-updater/releases/latest) |
-| 🧩 **DSH web plugin** | Adds **Check / Roll back / Version** buttons to every session header in the DSH web UI | `dsh plugin --profile web add github:mutoharohfiqhiabcd-source/dsh-updater` |
+| 🧩 **DSH web plugin** | Adds **Updater / Roll back / Version** buttons to every session header in the DSH web UI | `dsh plugin --profile web add github:mutoharohfiqhiabcd-source/dsh-updater` |
 
 The plugin's buttons call this repository's `updater_core.py` — the desktop app
 and the web plugin share one set of detection and rollback logic.
@@ -141,17 +141,17 @@ gains three buttons:
 
 | Button | What it does |
 | --- | --- |
-| **↻ Check** | Lists every local DSH installation (source checkout / npm global / runtime profile) with its version instantly, then fills in the upstream latest version and the update-available state asynchronously; **an updatable source checkout also gets an "Update" button (see below)** |
+| **↻ Updater** | Lists every local DSH installation (source checkout / npm global / runtime profile) with its version instantly, then fills in the upstream latest version and the update-available state asynchronously; **an updatable source checkout also gets an "Update" button (see below)** |
 | **↩ Roll back** | Lists source backups, npm restore points and profile restore points; the first press arms *Confirm?* and the second performs it — the current directory is saved as a fresh backup first, so a rollback is itself reversible |
 | **ⓘ Version** | Updater version, latest Release, local Python, local and archived EXEs, and every installation's version |
 
-Check and roll back are executed by this repository's `updater_core.py` (its new
+Updater and roll back are executed by this repository's `updater_core.py` (its new
 `--json` mode), so they share the desktop app's logic. They need Python 3.10+ on
 the machine; without it the panel says so and version info still works.
 
 ### Update DSH from the plugin (new in v1.0.0)
 
-In the Check panel, a **source checkout** with "Update available" gets an
+In the Updater panel, a **source checkout** with "Update available" gets an
 **Update** button:
 
 1. press Update, then press again on *Confirm?* (two presses, no accidents);
@@ -162,7 +162,7 @@ In the Check panel, a **source checkout** with "Update available" gets an
 4. a detached watcher then: backs up the old folder → swaps in the new source →
    runs `pnpm install` / `pnpm run build` **only when needed** → **restarts DSH
    automatically** (~2–5 min);
-5. refresh the page and press Check — the new version is in place.
+5. refresh the page and press Updater — the new version is in place.
 
 Safety: the old folder is backed up in full and restored automatically if the
 build fails; if another process still occupies the folder the staged update is
