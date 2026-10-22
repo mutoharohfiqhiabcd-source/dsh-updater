@@ -1387,7 +1387,7 @@ def test_cli_detect_accepts_fresh_flag(monkeypatch, capsys):
 
 
 # ---------------------------------------------------------------------------
-# 插件内更新 DSH：暂存 → DSH 关闭后看护进程应用（v1.0.0）
+# 插件内更新 DSH：暂存 → DSH 关闭后看护进程应用（v1.0.1）
 # ---------------------------------------------------------------------------
 def _make_fake_dsh_zip(path: Path, version: str, *, lock_text: str = "lock: same\n") -> bytes:
     """造一个最小的 DeepSeek Harness 官方源码 zip（能通过 _is_source_checkout）。"""
