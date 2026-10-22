@@ -516,6 +516,14 @@ function createApiHandler(options) {
             sendJson(res, 400, { ok: false, error: `目录不存在：${target}` })
             return
           }
+          // 插件更新对话框的选项：自动关闭 DSH / 强制 pnpm install / 强制 build
+          const flags = []
+          const autoClose = body.autoClose === true
+          if (autoClose) flags.push('--auto-close')
+          if (body.runInstall === true) flags.push('--install')
+          else if (body.runInstall === false) flags.push('--no-install')
+          if (body.runBuild === true) flags.push('--build')
+          else if (body.runBuild === false) flags.push('--no-build')
           const root = runningDshRoot()
           const inUse = root !== '' && samePath(root, target)
           const port = requestPort(req)
@@ -523,7 +531,7 @@ function createApiHandler(options) {
             const spec = restartSpec()
             const encoded = spec ? Buffer.from(JSON.stringify(spec), 'utf8').toString('base64') : ''
             const envelope = await runCore(options,
-              ['stage-source', target, encoded, '--port', String(port)],
+              ['stage-source', target, encoded, '--port', String(port), ...flags],
               undefined, 20 * 60_000)
             sendJson(res, envelope.ok ? 200 : 502, envelope.ok
               ? { ok: true, data: { ...envelope.data, inUse: true, restart: Boolean(spec) },
@@ -532,7 +540,7 @@ function createApiHandler(options) {
             return
           }
           const envelope = await runCore(options,
-            ['update-source', target, '--port', String(port)],
+            ['update-source', target, '--port', String(port), ...flags],
             undefined, 30 * 60_000)
           sendJson(res, envelope.ok ? 200 : 502, envelope.ok
             ? { ok: true, data: { ...envelope.data, inUse: false, restart: false },

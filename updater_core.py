@@ -2522,12 +2522,19 @@ def _cleanup_staging(manifest: dict) -> None:
 def stage_source_update(target_dir: Path, restart: dict | None = None,
                         port: int = DEFAULT_WEB_PORT,
                         wait_timeout: float = _UPDATE_WAIT_TIMEOUT,
+                        auto_close: bool = False,
+                        run_install: bool | None = None,
+                        run_build: bool | None = None,
                         log=print) -> dict:
-    """阶段一：下载官方源码到暂存目录，并启动看护进程等 DSH 关闭后应用。
+    """阶段一：下载官方源码到暂存目录，并启动看护进程。
+
+    auto_close=True 时看护进程会**自己结束 DSH**（复刻桌面 EXE 的体验），
+    否则等用户手动关闭 DSH。run_install / run_build 为 None 时按规则自动判断，
+    传 True/False 则以调用方为准（对应插件更新对话框里的勾选项）。
 
     返回结构化结果（插件客户端自己出文案）：
       { ok, staged, target, staging, old_version, new_version,
-        run_install, run_build, wait_port, restart, log_file, watcher_pid }
+        run_install, run_build, wait_port, auto_close, restart, log_file, watcher_pid }
     """
     target_dir = Path(target_dir)
     if not target_dir.is_dir():
@@ -2546,7 +2553,11 @@ def stage_source_update(target_dir: Path, restart: dict | None = None,
     got = _download_source_staging(target_dir, log=log)
     staging = got["staging"]
     new_version = got["new_version"]
-    run_install, run_build = _auto_update_steps(target_dir, staging)
+    auto_install, auto_build = _auto_update_steps(target_dir, staging)
+    if run_install is not None:
+        auto_install = bool(run_install)
+    if run_build is not None:
+        auto_build = bool(run_build)
     restart_spec = dict(restart) if isinstance(restart, dict) else {}
     log_path = update_watcher_log_file()
     manifest = {
@@ -2558,10 +2569,11 @@ def stage_source_update(target_dir: Path, restart: dict | None = None,
         "staging": str(staging),
         "old_version": old_version,
         "new_version": new_version,
-        "run_install": bool(run_install),
-        "run_build": bool(run_build),
+        "run_install": bool(auto_install),
+        "run_build": bool(auto_build),
         "wait_port": int(port),
         "wait_timeout": float(wait_timeout),
+        "auto_close": bool(auto_close),
         "restart": restart_spec,
         "log_file": str(log_path),
         "watcher_pid": 0,
@@ -2573,10 +2585,15 @@ def stage_source_update(target_dir: Path, restart: dict | None = None,
     _write_pending_update(manifest)
     if not pid:
         _watcher_log(log_path, "看护进程没起来：更新已暂存，但关闭 DSH 后不会自动应用。")
+    elif auto_close:
+        _watcher_log(log_path, f"看护进程已启动（pid {pid}）：将自动关闭 DSH 并应用更新。")
     else:
         _watcher_log(log_path,
                      f"看护进程已启动（pid {pid}）：等待端口 {port} 关闭后应用更新。")
-    log(f"更新已暂存：{old_version or '未知'} → {new_version}；关闭 DSH 后将自动替换并重启。")
+    if auto_close:
+        log(f"更新已暂存：{old_version or '未知'} → {new_version}；看护进程会关闭 DSH 并自动更新。")
+    else:
+        log(f"更新已暂存：{old_version or '未知'} → {new_version}；关闭 DSH 后将自动替换并重启。")
     return {
         "ok": True,
         "staged": True,
@@ -2584,9 +2601,10 @@ def stage_source_update(target_dir: Path, restart: dict | None = None,
         "staging": str(staging),
         "old_version": old_version,
         "new_version": new_version,
-        "run_install": bool(run_install),
-        "run_build": bool(run_build),
+        "run_install": bool(auto_install),
+        "run_build": bool(auto_build),
         "wait_port": int(port),
+        "auto_close": bool(auto_close),
         "restart": bool(restart_spec),
         "log_file": str(log_path),
         "watcher_pid": pid,
@@ -2673,7 +2691,9 @@ def _apply_staged_tree(target_dir: Path, staging: Path, old_version: str,
             "run_build": run_build}
 
 
-def update_source_immediate(target_dir: Path, log=print) -> dict:
+def update_source_immediate(target_dir: Path, log=print,
+                            run_install: bool | None = None,
+                            run_build: bool | None = None) -> dict:
     """目标目录**没有被运行中的 DSH 占用**时：暂存并立即应用（不等待、不重启）。"""
     target_dir = Path(target_dir)
     if not target_dir.is_dir():
@@ -2684,15 +2704,19 @@ def update_source_immediate(target_dir: Path, log=print) -> dict:
     got = _download_source_staging(target_dir, log=log)
     staging = got["staging"]
     new_version = got["new_version"]
-    run_install, run_build = _auto_update_steps(target_dir, staging)
+    auto_install, auto_build = _auto_update_steps(target_dir, staging)
+    if run_install is not None:
+        auto_install = bool(run_install)
+    if run_build is not None:
+        auto_build = bool(run_build)
     try:
         result = _apply_staged_tree(target_dir, staging, old_version, new_version,
-                                    run_install, run_build, log=log)
+                                    auto_install, auto_build, log=log)
     finally:
         if staging.is_dir():
             shutil.rmtree(staging, ignore_errors=True)
     result.update({"applied": True, "staged": False, "old_version": old_version,
-                   "run_install": run_install, "run_build": run_build})
+                   "run_install": auto_install, "run_build": auto_build})
     return result
 
 
@@ -2813,14 +2837,50 @@ def _restart_dsh_after_update(restart: dict, port: int, logger) -> bool:
     return True
 
 
+def _auto_close_dsh(port: int, logger) -> bool:
+    """看护进程自己结束 DSH（复刻桌面 EXE 的「询问后自动关闭」体验）。
+
+    注意：**不能用 taskkill /T**——看护进程是 DSH 的 detached 子进程，
+    /T 会顺着父子关系把它自己也杀掉。这里只对占用端口的 PID 发 SIGTERM。
+    DSH 的子进程（bash / subprocess runner）一般不占用源码检出目录，不影响换目录。
+    """
+    procs = processes_on_port(port)
+    if not procs:
+        logger(f"未发现占用 {port} 的进程（DSH 可能已经关闭）")
+        return False
+    killed = False
+    for proc in procs:
+        pid = proc.get("pid")
+        if not pid:
+            continue
+        try:
+            os.kill(int(pid), signal.SIGTERM)
+            logger(f"已结束 DSH 进程 {pid}（{proc.get('name') or '?'}）")
+            killed = True
+        except Exception as e:  # noqa: BLE001
+            logger(f"结束进程 {pid} 失败：{type(e).__name__}: {e}")
+    if killed:
+        for _ in range(60):
+            if not _is_port_open(port):
+                logger("DSH 已关闭，端口已释放。")
+                return True
+            time.sleep(1)
+        logger("端口 60 秒内仍未释放，改为等待用户手动关闭…")
+    return killed
+
+
 def watch_and_apply_pending_update(manifest_path: Path | None = None) -> dict:
-    """看护进程主流程：等 DSH 关闭 → 应用更新 → 重新启动 DSH。"""
+    """看护进程主流程：等 DSH 关闭（必要时自己关）→ 应用更新 → 重新启动 DSH。"""
     manifest_path = Path(manifest_path or pending_update_file())
     manifest = _read_json(manifest_path)
     log_file = Path(str(manifest.get("log_file") or update_watcher_log_file()))
     logger = lambda message: _watcher_log(log_file, str(message))  # noqa: E731
     port = int(manifest.get("wait_port") or DEFAULT_WEB_PORT)
     timeout = float(manifest.get("wait_timeout") or _UPDATE_WAIT_TIMEOUT)
+    if bool(manifest.get("auto_close")):
+        logger("自动关闭模式：先等 3 秒让插件把「正在关闭 DSH」返回给页面，然后结束 DSH。")
+        time.sleep(3)
+        _auto_close_dsh(port, logger)
     logger(f"看护进程启动（pid {os.getpid()}）：等待端口 {port} 关闭，最多 {timeout / 60:.0f} 分钟。")
     closed = 0
     deadline = time.monotonic() + timeout
@@ -2881,6 +2941,7 @@ def pending_update_status() -> dict:
         "run_install": bool(manifest.get("run_install")),
         "run_build": bool(manifest.get("run_build")),
         "wait_port": int(manifest.get("wait_port") or DEFAULT_WEB_PORT),
+        "auto_close": bool(manifest.get("auto_close")),
         "restart": bool(manifest.get("restart")),
         "watcher_pid": int(manifest.get("watcher_pid") or 0),
         "backup": str(manifest.get("backup") or ""),
@@ -2946,6 +3007,25 @@ def _parse_port_arg(argv: list, default: int = DEFAULT_WEB_PORT) -> int:
         return int(argv[idx + 1])
     except Exception:  # noqa: BLE001
         return default
+
+
+def _parse_stage_flags(argv: list) -> tuple:
+    """解析暂存更新的可选开关：自动关 DSH / 强制 pnpm install / 强制 build。
+
+    返回 (auto_close, run_install, run_build)，其中后两个为 None 表示按规则自动判断。
+    """
+    auto_close = "--auto-close" in argv
+    run_install = None
+    if "--install" in argv:
+        run_install = True
+    elif "--no-install" in argv:
+        run_install = False
+    run_build = None
+    if "--build" in argv:
+        run_build = True
+    elif "--no-build" in argv:
+        run_build = False
+    return auto_close, run_install, run_build
 
 
 # ---------------------------------------------------------------------------
@@ -3485,14 +3565,24 @@ def _cli_main(argv: list) -> int:
             envelope["data"] = rollback_npm(argv[1], log=lines.append)
         elif action == "stage-source":
             if len(argv) < 2:
-                raise RuntimeError("用法：--json stage-source <目标目录> [重启信息] [--port N]")
+                raise RuntimeError(
+                    "用法：--json stage-source <目标目录> [重启信息] [--port N] "
+                    "[--auto-close] [--install|--no-install] [--build|--no-build]")
             restart = _decode_restart_spec(argv[2] if len(argv) > 2 else "")
+            auto_close, install_flag, build_flag = _parse_stage_flags(argv)
             envelope["data"] = stage_source_update(
-                Path(argv[1]), restart=restart, port=_parse_port_arg(argv), log=lines.append)
+                Path(argv[1]), restart=restart, port=_parse_port_arg(argv),
+                auto_close=auto_close, run_install=install_flag,
+                run_build=build_flag, log=lines.append)
         elif action == "update-source":
             if len(argv) < 2:
-                raise RuntimeError("用法：--json update-source <目标目录>")
-            envelope["data"] = update_source_immediate(Path(argv[1]), log=lines.append)
+                raise RuntimeError(
+                    "用法：--json update-source <目标目录> [--install|--no-install] "
+                    "[--build|--no-build]")
+            _auto, install_flag, build_flag = _parse_stage_flags(argv)
+            envelope["data"] = update_source_immediate(
+                Path(argv[1]), log=lines.append,
+                run_install=install_flag, run_build=build_flag)
         elif action == "update-status":
             envelope["data"] = pending_update_status()
         elif action == "cancel-staged":

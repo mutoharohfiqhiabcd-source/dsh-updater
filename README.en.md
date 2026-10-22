@@ -151,19 +151,26 @@ the machine; without it the panel says so and version info still works.
 
 ### Update DSH from the plugin
 
-In the Updater panel, any row that is "Update available" gets an **Update** button:
+In the Updater panel, any row that is "Update available" gets an **Update** button
+which opens an **in-plugin update dialog** (a replica of the desktop updater):
 
-1. press Update — the plugin pops up the **desktop updater window** (the EXE);
-2. inside that window press Update: the desktop app detects the running DSH, asks
-   to close it, backs up the old folder, downloads the official source and swaps
-   the whole folder (optional `pnpm install` / `pnpm run build`);
-3. start DSH again and you are on the new version.
+| In the dialog | Meaning |
+|---|---|
+| target / version | current version → upstream latest |
+| ✅ close DSH automatically | the watcher ends DSH (only the PID owning the port) and restarts it afterwards |
+| ☐ `pnpm install` after replacing | recommended when dependencies changed |
+| ☐ `pnpm run build` after replacing | required when DSH is started from a source build |
+| buttons | Start update / Close / **Use desktop updater** (still launches the EXE) |
 
-> The update itself runs through the desktop app's full flow (close DSH / backup /
-> rollback all live in the EXE); the plugin just opens the window for you. If no
-> updater EXE is found locally, the plugin falls back to its **in-plugin update**:
-> download to staging → ask you to close DSH → a detached watcher swaps, rebuilds
-> and restarts DSH.
+With "close DSH automatically" the flow is: plugin stages the official source →
+watcher closes DSH → backs up the old folder → swaps the new source (keeps
+`node_modules`/`.git`) → optional install/build → **restarts DSH** → the page
+polls until DSH is back and **reloads itself**.
+
+> Without auto-close you are asked to close DSH manually; the watcher then swaps,
+> rebuilds and restarts. Safety: full backup, rollback on build failure, retry
+> button when another process still occupies the folder (no re-download), and a
+> cancel button while staged.
 
 > Which rows get the **Update** button: **source checkouts**, and **runtime
 > profiles whose runtime actually is a source checkout** (when

@@ -1442,7 +1442,8 @@ def _patch_update_download(monkeypatch, zip_bytes: bytes, tmp_path: Path) -> Non
 def _stage_fake_update(monkeypatch, tmp_path, *, target_version="0.1.0",
                        new_version="0.2.0", build=False,
                        old_lock="lock: same\n", new_lock="lock: same\n",
-                       restart=None, wait_timeout=1800.0, watcher_pid=4321):
+                       restart=None, wait_timeout=1800.0, watcher_pid=4321,
+                       auto_close=False):
     """公共前置：造目标目录 + 假 zip，然后 stage 一次更新。"""
     target = _make_checkout_dir(tmp_path / "dsh", target_version, build=build,
                                 lock_text=old_lock)
@@ -1451,7 +1452,7 @@ def _stage_fake_update(monkeypatch, tmp_path, *, target_version="0.1.0",
     _patch_update_download(monkeypatch, zip_bytes, tmp_path)
     monkeypatch.setattr(core, "_spawn_update_watcher", lambda manifest_path: watcher_pid)
     staged = core.stage_source_update(target, restart=restart or {}, port=3999,
-                                      wait_timeout=wait_timeout)
+                                      wait_timeout=wait_timeout, auto_close=auto_close)
     return target, staged
 
 
@@ -1769,5 +1770,64 @@ def test_detect_all_keeps_gui_updateable_semantics(monkeypatch):
     data = core.detect_all(fetch_official=False)
     assert data["installs"][0]["update_target"] == str(checkout)
     assert data["installs"][0]["updateable"] is False
+
+
+# ---------------------------------------------------------------------------
+# 插件内「复刻桌面 EXE」：自动关 DSH + 更新选项
+# ---------------------------------------------------------------------------
+def test_stage_source_update_auto_close_and_step_overrides(monkeypatch, tmp_path):
+    target = _make_checkout_dir(tmp_path / "dsh", "0.1.0", build=True)  # 默认会 build
+    zip_bytes = _make_fake_dsh_zip(tmp_path / "upstream.zip", "0.2.0",
+                                   lock_text="lock: same\n")
+    _patch_update_download(monkeypatch, zip_bytes, tmp_path)
+    monkeypatch.setattr(core, "_spawn_update_watcher", lambda manifest_path: 4321)
+    staged = core.stage_source_update(
+        target, restart={"execPath": "C:/node.exe"}, port=3999,
+        auto_close=True, run_install=True, run_build=False)
+    assert staged["auto_close"] is True
+    assert staged["run_install"] is True, "调用方强制 install 时要覆盖自动判断"
+    assert staged["run_build"] is False, "调用方强制不 build 时要覆盖自动判断"
+    manifest = core.load_pending_update()
+    assert manifest["auto_close"] is True
+    assert manifest["run_install"] is True and manifest["run_build"] is False
+    status = core.pending_update_status()
+    assert status["auto_close"] is True
+
+
+def test_parse_stage_flags():
+    assert core._parse_stage_flags(["stage-source", "x"]) == (False, None, None)
+    assert core._parse_stage_flags(["stage-source", "x", "--auto-close"]) == (True, None, None)
+    assert core._parse_stage_flags(["x", "--install", "--no-build"]) == (False, True, False)
+    assert core._parse_stage_flags(["x", "--no-install", "--build"]) == (False, False, True)
+
+
+def test_watcher_auto_close_kills_dsh_and_applies(monkeypatch, tmp_path):
+    """自动关闭模式：看护进程自己结束占用端口的 DSH，然后替换+重启。"""
+    target, _staged = _stage_fake_update(monkeypatch, tmp_path, auto_close=True)
+    killed = []
+    monkeypatch.setattr(core, "processes_on_port",
+                        lambda port: [{"pid": 999, "name": "node.exe"}])
+    monkeypatch.setattr(core.os, "kill", lambda pid, sig: killed.append(pid))
+    monkeypatch.setattr(core, "_is_port_open", lambda *a, **k: False)
+    monkeypatch.setattr(core.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(core, "_run_pnpm_step", lambda t, args, log, what: None)
+    result = core.watch_and_apply_pending_update()
+    assert killed == [999], "应只结束占用端口的 DSH 进程（不能用 taskkill /T，否则杀掉看护进程自己）"
+    assert result["ok"] is True and result["applied"] is True
+    assert core._read_dir_version(target) == "0.2.0"
+    assert core.pending_update_status()["status"] == "done"
+
+
+def test_watcher_without_auto_close_does_not_kill(monkeypatch, tmp_path):
+    _target, _staged = _stage_fake_update(monkeypatch, tmp_path, auto_close=False)
+    killed = []
+    monkeypatch.setattr(core, "processes_on_port", lambda port: [{"pid": 999, "name": "node.exe"}])
+    monkeypatch.setattr(core.os, "kill", lambda pid, sig: killed.append(pid))
+    monkeypatch.setattr(core, "_is_port_open", lambda *a, **k: False)
+    monkeypatch.setattr(core.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(core, "_run_pnpm_step", lambda t, args, log, what: None)
+    result = core.watch_and_apply_pending_update()
+    assert killed == [], "非自动关闭模式不应主动杀 DSH"
+    assert result["applied"] is True
 
 
