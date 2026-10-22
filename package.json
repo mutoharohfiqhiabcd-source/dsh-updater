@@ -1,6 +1,6 @@
 {
   "name": "dsh-updater-plugin",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "在 DSH 里检测 / 回滚 / 查看版本，并管理 dsh 自动更新器（In-DSH check, rollback and version panel for the DSH updater）",
   "keywords": [
     "dsh",

@@ -7,6 +7,10 @@
 //      回滚目标     GET  /rollback-targets
 //      执行回滚     POST /rollback-source | /rollback-npm
 //      快速版本     GET  /quick
+//      更新 DSH     POST /update-source   （目标正被运行时先暂存，关闭 DSH 后自动应用）
+//      更新状态     GET  /update-status
+//      取消更新     POST /cancel-update
+//      重试应用     POST /resume-update   （目录被占用等原因失败后，重新挂上看护进程）
 //    前三个交给本仓库的 updater_core.py（`--json` 模式）执行，逻辑与桌面版完全一致；
 //    没装 Python 时 /detect、/rollback-* 会返回友好错误，其余功能不受影响。
 //
@@ -21,7 +25,7 @@ import { spawn } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -121,6 +125,41 @@ async function githubLatest(repo, signal) {
     }
   }
   throw new Error(describeError(lastError))
+}
+
+// ---------------------------------------------------------------------------
+// 「在插件里更新 DSH 自己」用的路径/进程判断
+// ---------------------------------------------------------------------------
+
+/** 当前运行中的 DSH 的根目录；从 argv[1] 的 apps/cli/(lib|src)/bin.(js|ts) 反推。 */
+function runningDshRoot() {
+  const entry = process.argv[1] ? resolve(String(process.argv[1])) : ''
+  if (!/[\\/]apps[\\/]cli[\\/](?:lib|src)[\\/]bin\.(?:js|ts)$/.test(entry)) return ''
+  return resolve(entry, '..', '..', '..', '..')
+}
+
+/** 两个路径是否指向同一个目录（Windows 路径不区分大小写）。 */
+function samePath(a, b) {
+  try {
+    return resolve(String(a)).toLowerCase() === resolve(String(b)).toLowerCase()
+  } catch {
+    return false
+  }
+}
+
+/** 更新完成后自动重启 DSH 需要的信息；判断不出来（如 Electron 桌面端）时返回 null。 */
+function restartSpec() {
+  if (process.versions?.electron) return null
+  if (!runningDshRoot()) return null
+  return { execPath: process.execPath, args: process.argv.slice(1), cwd: process.cwd() }
+}
+
+/** 本次 HTTP 请求使用的端口（取 Host 头），看护进程靠它判断 DSH 是否已关闭。 */
+function requestPort(req) {
+  const host = String(req.headers.host ?? '')
+  const idx = host.lastIndexOf(':')
+  const port = idx >= 0 ? Number(host.slice(idx + 1)) : NaN
+  return Number.isFinite(port) && port > 0 && port < 65536 ? port : 3080
 }
 
 function formatBytes(size) {
@@ -227,7 +266,7 @@ function pythonCandidates(configured) {
  * 调 updater_core.py 的 `--json` 模式并把结果解出来。
  * @returns core 返回的 envelope：{ ok, action, data, error, log }
  */
-async function runCore(options, args, signal) {
+async function runCore(options, args, signal, timeoutMs) {
   if (!existsSync(CORE_SCRIPT)) {
     throw new Error(`找不到 updater_core.py（期望在 ${CORE_SCRIPT}）`)
   }
@@ -235,7 +274,8 @@ async function runCore(options, args, signal) {
   for (const exe of pythonCandidates(options.python)) {
     let result
     try {
-      result = await spawnCollect(exe, ['-X', 'utf8', CORE_SCRIPT, '--json', ...args], options.coreTimeoutMs, signal)
+      result = await spawnCollect(exe, ['-X', 'utf8', CORE_SCRIPT, '--json', ...args],
+        timeoutMs ?? options.coreTimeoutMs, signal)
     } catch (error) {
       if (error?.code === 'ENOENT') { attemptErrors.push(`${exe}: 未安装`); continue }
       throw error
@@ -384,6 +424,8 @@ function createApiHandler(options) {
     const action = url.pathname.slice(options.route.length).replace(/^\//, '')
     const method = String(req.method ?? 'GET').toUpperCase()
     const wantsPost = action === 'rollback-source' || action === 'rollback-npm'
+      || action === 'update-source' || action === 'cancel-update'
+      || action === 'resume-update'
     if (wantsPost ? method !== 'POST' : method !== 'GET') {
       sendJson(res, 405, { ok: false, error: `不支持的方法 ${method}` })
       return
@@ -425,6 +467,62 @@ function createApiHandler(options) {
           const version = String(body.version ?? '').trim()
           if (!version) { sendJson(res, 400, { ok: false, error: '缺少 version' }); return }
           const envelope = await runCore(options, ['rollback-npm', version])
+          sendJson(res, envelope.ok ? 200 : 502, envelope.ok
+            ? { ok: true, data: envelope.data, log: envelope.log }
+            : { ok: false, error: envelope.error, log: envelope.log })
+          return
+        }
+        case 'update-source': {
+          const body = await readJsonBody(req)
+          const rawTarget = String(body.target ?? '').trim()
+          if (!rawTarget) { sendJson(res, 400, { ok: false, error: '缺少 target' }); return }
+          const target = resolve(rawTarget)
+          if (!existsSync(target)) {
+            sendJson(res, 400, { ok: false, error: `目录不存在：${target}` })
+            return
+          }
+          const root = runningDshRoot()
+          const inUse = root !== '' && samePath(root, target)
+          const port = requestPort(req)
+          if (inUse) {
+            const spec = restartSpec()
+            const encoded = spec ? Buffer.from(JSON.stringify(spec), 'utf8').toString('base64') : ''
+            log(`暂存 DSH 更新（目标正在运行）：${target}`)
+            const envelope = await runCore(options,
+              ['stage-source', target, encoded, '--port', String(port)],
+              undefined, 20 * 60_000)
+            sendJson(res, envelope.ok ? 200 : 502, envelope.ok
+              ? { ok: true, data: { ...envelope.data, inUse: true, restart: Boolean(spec) },
+                log: envelope.log }
+              : { ok: false, error: envelope.error, log: envelope.log })
+            return
+          }
+          log(`直接更新 DSH（目标未被运行中的 DSH 占用）：${target}`)
+          const envelope = await runCore(options,
+            ['update-source', target, '--port', String(port)],
+            undefined, 30 * 60_000)
+          sendJson(res, envelope.ok ? 200 : 502, envelope.ok
+            ? { ok: true, data: { ...envelope.data, inUse: false, restart: false },
+              log: envelope.log }
+            : { ok: false, error: envelope.error, log: envelope.log })
+          return
+        }
+        case 'update-status': {
+          const envelope = await runCore(options, ['update-status'])
+          sendJson(res, envelope.ok ? 200 : 502, envelope.ok
+            ? { ok: true, data: envelope.data }
+            : { ok: false, error: envelope.error })
+          return
+        }
+        case 'cancel-update': {
+          const envelope = await runCore(options, ['cancel-staged'], undefined, 30_000)
+          sendJson(res, envelope.ok ? 200 : 502, envelope.ok
+            ? { ok: true, data: envelope.data, log: envelope.log }
+            : { ok: false, error: envelope.error, log: envelope.log })
+          return
+        }
+        case 'resume-update': {
+          const envelope = await runCore(options, ['resume-staged'], undefined, 60_000)
           sendJson(res, envelope.ok ? 200 : 502, envelope.ok
             ? { ok: true, data: envelope.data, log: envelope.log }
             : { ok: false, error: envelope.error, log: envelope.log })

@@ -141,7 +141,7 @@ gains three buttons:
 
 | Button | What it does |
 | --- | --- |
-| **↻ Check** | Lists every local DSH installation (source checkout / npm global / runtime profile) with its version instantly, then fills in the upstream latest version and the update-available state asynchronously |
+| **↻ Check** | Lists every local DSH installation (source checkout / npm global / runtime profile) with its version instantly, then fills in the upstream latest version and the update-available state asynchronously; **an updatable source checkout also gets an "Update" button (see below)** |
 | **↩ Roll back** | Lists source backups, npm restore points and profile restore points; the first press arms *Confirm?* and the second performs it — the current directory is saved as a fresh backup first, so a rollback is itself reversible |
 | **ⓘ Version** | Updater version, latest Release, local Python, local and archived EXEs, and every installation's version |
 
@@ -149,10 +149,31 @@ Check and roll back are executed by this repository's `updater_core.py` (its new
 `--json` mode), so they share the desktop app's logic. They need Python 3.10+ on
 the machine; without it the panel says so and version info still works.
 
+### Update DSH from the plugin (new in v0.10.0)
+
+In the Check panel, a **source checkout** with "Update available" gets an
+**Update** button:
+
+1. press Update, then press again on *Confirm?* (two presses, no accidents);
+2. the plugin downloads the official source into a staging folder next to the
+   target (this does **not** touch the running DSH directory; it may take minutes);
+3. when the banner says the update is staged, **close DSH** (close every DSH
+   instance started from that folder);
+4. a detached watcher then: backs up the old folder → swaps in the new source →
+   runs `pnpm install` / `pnpm run build` **only when needed** → **restarts DSH
+   automatically** (~2–5 min);
+5. refresh the page and press Check — the new version is in place.
+
+Safety: the old folder is backed up in full and restored automatically if the
+build fails; if another process still occupies the folder the staged update is
+kept so you can hit *Retry* (no re-download); a staged update can be cancelled at
+any time. Only **source checkouts** are supported (not npm globals / profiles).
+
 > DSH's "Official" group only holds plugins shipped inside DSH itself; third-party
 > plugins always land in "Installed", with no review or store submission.
 > ⚠️ The plugin runs inside the DSH host process, **outside the workspace
-> sandbox**; `download` and `launch` really write files and start processes.
+> sandbox**; `download` / `launch` / `roll back` / `update DSH` really write files
+> and start processes.
 
 ---
 

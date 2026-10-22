@@ -1385,3 +1385,333 @@ def test_cli_detect_accepts_fresh_flag(monkeypatch, capsys):
     assert code == 0 and payload["ok"] is True
     assert seen.get("fresh") is True
 
+
+# ---------------------------------------------------------------------------
+# 插件内更新 DSH：暂存 → DSH 关闭后看护进程应用（v0.10.0）
+# ---------------------------------------------------------------------------
+def _make_fake_dsh_zip(path: Path, version: str, *, lock_text: str = "lock: same\n") -> bytes:
+    """造一个最小的 DeepSeek Harness 官方源码 zip（能通过 _is_source_checkout）。"""
+    root = "deepseek-harness-master"
+    files = {
+        "package.json": json.dumps(
+            {"name": "@deepseek-ai/dsh-root", "version": version}),
+        "apps/cli/package.json": json.dumps(
+            {"name": "@deepseek-ai/dsh", "version": version}),
+        "apps/cli/src/bin.ts": "// cli\n",
+        "pnpm-lock.yaml": lock_text,
+    }
+    with zipfile.ZipFile(path, "w") as zf:
+        for name, content in files.items():
+            zf.writestr(f"{root}/{name}", content)
+    return path.read_bytes()
+
+
+def _make_checkout_dir(root: Path, version: str, *, build: bool = False,
+                       lock_text: str = "lock: same\n") -> Path:
+    """造一个本地源码检出（含 node_modules 里的一枚哨兵文件）。"""
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "package.json").write_text(
+        json.dumps({"name": "@deepseek-ai/dsh-root", "version": version}), encoding="utf-8")
+    (root / "apps" / "cli").mkdir(parents=True, exist_ok=True)
+    (root / "apps" / "cli" / "package.json").write_text("{}", encoding="utf-8")
+    (root / "pnpm-lock.yaml").write_text(lock_text, encoding="utf-8")
+    sentinel = root / "node_modules" / "keep" / "a.txt"
+    sentinel.parent.mkdir(parents=True, exist_ok=True)
+    sentinel.write_text("keep", encoding="utf-8")
+    if build:
+        lib = root / "apps" / "cli" / "lib"
+        lib.mkdir(parents=True, exist_ok=True)
+        (lib / "bin.js").write_text("// old build\n", encoding="utf-8")
+    return root
+
+
+def _patch_update_download(monkeypatch, zip_bytes: bytes, tmp_path: Path) -> None:
+    """让 download_file 不联网，直接落一份假官方源码 zip。"""
+    zip_path = tmp_path / "fake-dsh.zip"
+    zip_path.write_bytes(zip_bytes)
+    data = zip_path.read_bytes()
+
+    def fake_download(url, dest, log=print, timeout=120.0, progress_cb=None):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
+        return dest
+
+    monkeypatch.setattr(core, "download_file", fake_download)
+
+
+def _stage_fake_update(monkeypatch, tmp_path, *, target_version="0.1.0",
+                       new_version="0.2.0", build=False,
+                       old_lock="lock: same\n", new_lock="lock: same\n",
+                       restart=None, wait_timeout=1800.0, watcher_pid=4321):
+    """公共前置：造目标目录 + 假 zip，然后 stage 一次更新。"""
+    target = _make_checkout_dir(tmp_path / "dsh", target_version, build=build,
+                                lock_text=old_lock)
+    zip_bytes = _make_fake_dsh_zip(tmp_path / "upstream.zip", new_version,
+                                   lock_text=new_lock)
+    _patch_update_download(monkeypatch, zip_bytes, tmp_path)
+    monkeypatch.setattr(core, "_spawn_update_watcher", lambda manifest_path: watcher_pid)
+    staged = core.stage_source_update(target, restart=restart or {}, port=3999,
+                                      wait_timeout=wait_timeout)
+    return target, staged
+
+
+def test_stage_source_update_writes_manifest_without_touching_target(monkeypatch, tmp_path):
+    """暂存阶段：只下载到同级暂存目录，绝不碰正在被 DSH 使用的目标目录。"""
+    target, staged = _stage_fake_update(
+        monkeypatch, tmp_path, build=True, old_lock="lock: old\n",
+        new_lock="lock: new\n", restart={"execPath": "C:/node.exe",
+                                         "args": ["apps/cli/lib/bin.js", "web"],
+                                         "cwd": str(tmp_path)})
+    assert staged["ok"] is True and staged["staged"] is True
+    assert staged["old_version"] == "0.1.0"
+    assert staged["new_version"] == "0.2.0"
+    assert staged["run_build"] is True, "目标有 apps/cli/lib，必须重新构建"
+    assert staged["run_install"] is True, "pnpm-lock.yaml 变了，必须重新 install"
+    assert staged["restart"] is True
+    assert staged["wait_port"] == 3999
+    assert Path(staged["staging"]).is_dir()
+    assert (Path(staged["staging"]) / "package.json").is_file()
+    # 目标目录本身没被动过
+    assert core._read_dir_version(target) == "0.1.0"
+    manifest = core.load_pending_update()
+    assert manifest["status"] == "waiting"
+    assert manifest["watcher_pid"] == 4321
+    assert manifest["wait_port"] == 3999
+    assert manifest["restart"]["execPath"] == "C:/node.exe"
+
+
+def test_stage_source_update_rejects_non_checkout(monkeypatch, tmp_path):
+    bogus = tmp_path / "not-a-checkout"
+    bogus.mkdir()
+    with pytest.raises(RuntimeError):
+        core.stage_source_update(bogus)
+
+
+def test_apply_pending_update_swaps_and_keeps_node_modules(monkeypatch, tmp_path):
+    target, _staged = _stage_fake_update(monkeypatch, tmp_path)
+    run_calls = []
+    monkeypatch.setattr(core, "_run_pnpm_step",
+                        lambda t, args, log, what: run_calls.append((list(args), what)))
+    result = core.apply_pending_update()
+    assert result["ok"] is True and result["new_version"] == "0.2.0"
+    assert core._read_dir_version(target) == "0.2.0"
+    # node_modules 必须从备份里搬回新目录
+    assert (target / "node_modules" / "keep" / "a.txt").is_file()
+    # 没 build、锁文件也没变 → 不应跑 pnpm
+    assert run_calls == []
+    manifest = core.load_pending_update()
+    assert manifest["status"] == "done"
+    assert Path(manifest["backup"]).is_dir(), "旧版本要留备份，便于回滚"
+    # 暂存目录已被移走
+    assert not Path(manifest["staging"]).exists()
+
+
+def test_apply_pending_update_runs_install_and_build(monkeypatch, tmp_path):
+    target, _staged = _stage_fake_update(
+        monkeypatch, tmp_path, build=True, old_lock="lock: old\n", new_lock="lock: new\n")
+    calls = []
+    monkeypatch.setattr(core, "_run_pnpm_step",
+                        lambda t, args, log, what: calls.append((list(args), what)))
+    result = core.apply_pending_update()
+    assert result["ok"] is True
+    kinds = [tuple(args) for args, _ in calls]
+    assert ("install",) in kinds and ("run", "build") in kinds
+
+
+def test_apply_pending_update_rolls_back_when_build_fails(monkeypatch, tmp_path):
+    """构建失败必须自动回滚到旧版本——否则用户重启会得到一个跑不起来的 DSH。"""
+    target, _staged = _stage_fake_update(monkeypatch, tmp_path, build=True)
+
+    def boom(target_dir, args, log, what):
+        raise RuntimeError("pnpm 挂了")
+
+    monkeypatch.setattr(core, "_run_pnpm_step", boom)
+    with pytest.raises(RuntimeError):
+        core.apply_pending_update()
+    assert core._read_dir_version(target) == "0.1.0", "失败后必须回滚到旧版本"
+    assert (target / "node_modules" / "keep" / "a.txt").is_file()
+    manifest = core.load_pending_update()
+    assert manifest["status"] == "failed"
+    assert "pnpm 挂了" in manifest["error"]
+
+
+def test_pending_update_status_and_cancel(monkeypatch, tmp_path):
+    target, staged = _stage_fake_update(monkeypatch, tmp_path)
+    status = core.pending_update_status()
+    assert status["present"] is True
+    assert status["status"] == "waiting"
+    assert status["old_version"] == "0.1.0" and status["new_version"] == "0.2.0"
+    assert status["target"] == str(target)
+    assert isinstance(status["log_tail"], list)
+
+    killed = []
+    monkeypatch.setattr(core.os, "kill", lambda pid, sig: killed.append(pid))
+    result = core.cancel_pending_update()
+    assert result["ok"] is True and result["canceled"] is True
+    assert killed == [4321]
+    assert not Path(staged["staging"]).exists(), "取消后暂存目录要删掉"
+    assert core.pending_update_status()["status"] == "canceled"
+    assert core.cancel_pending_update()["canceled"] is False
+
+
+def test_cancel_refuses_while_applying(monkeypatch, tmp_path):
+    _target, staged = _stage_fake_update(monkeypatch, tmp_path)
+    core._set_pending_status("applying")
+    with pytest.raises(RuntimeError):
+        core.cancel_pending_update()
+    # 状态和暂存目录都不能被取消操作破坏
+    assert core.pending_update_status()["status"] == "applying"
+    assert Path(staged["staging"]).is_dir()
+
+
+def test_update_source_immediate_applies_without_waiting(monkeypatch, tmp_path):
+    """目标没被运行中的 DSH 占用时：直接更新，不写清单、不等 DSH 关闭。"""
+    target = _make_checkout_dir(tmp_path / "dsh", "0.1.0")
+    zip_bytes = _make_fake_dsh_zip(tmp_path / "upstream.zip", "0.2.0")
+    _patch_update_download(monkeypatch, zip_bytes, tmp_path)
+    monkeypatch.setattr(core, "_run_pnpm_step",
+                        lambda t, args, log, what: None)
+    result = core.update_source_immediate(target)
+    assert result["applied"] is True and result["new_version"] == "0.2.0"
+    assert core._read_dir_version(target) == "0.2.0"
+    assert (target / "node_modules" / "keep" / "a.txt").is_file()
+    assert core.load_pending_update() == {}, "直更模式不该留下待应用清单"
+    leftovers = list(target.parent.glob(".dsh-stage-*")) + list(target.parent.glob("dsh.dsh-stage-*"))
+    assert leftovers == [], "暂存目录必须清理干净"
+
+
+def test_watcher_expires_when_dsh_never_closes(monkeypatch, tmp_path):
+    _target, staged = _stage_fake_update(monkeypatch, tmp_path, wait_timeout=0.1)
+    monkeypatch.setattr(core, "_is_port_open", lambda *a, **k: True)
+    monkeypatch.setattr(core.time, "sleep", lambda seconds: None)
+    result = core.watch_and_apply_pending_update()
+    assert result == {"ok": False, "reason": "timeout"}
+    assert core.pending_update_status()["status"] == "expired"
+    assert not Path(staged["staging"]).exists(), "超时后要清理暂存目录"
+
+
+def test_watcher_applies_after_port_closes(monkeypatch, tmp_path):
+    target, _staged = _stage_fake_update(monkeypatch, tmp_path)
+    monkeypatch.setattr(core, "_is_port_open", lambda *a, **k: False)
+    monkeypatch.setattr(core.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(core, "_run_pnpm_step", lambda t, args, log, what: None)
+    result = core.watch_and_apply_pending_update()
+    assert result["ok"] is True and result["applied"] is True
+    assert core._read_dir_version(target) == "0.2.0"
+    assert core.pending_update_status()["status"] == "done"
+    assert result["restarted"] is False, "清单里没有重启信息时不应尝试重启"
+
+
+def test_restart_requires_existing_executable(tmp_path):
+    logs = []
+    ok = core._restart_dsh_after_update(
+        {"execPath": str(tmp_path / "missing-node.exe"), "args": [], "cwd": str(tmp_path)},
+        3999, logs.append)
+    assert ok is False
+    assert logs, "失败原因要写进日志，别静默"
+
+
+def test_decode_restart_spec_roundtrip():
+    import base64 as _b64
+
+    spec = {"execPath": "C:/node.exe", "args": ["apps/cli/lib/bin.js", "web"],
+            "cwd": "D:/deepseek-harness-master/deepseek-harness-master"}
+    encoded = _b64.b64encode(json.dumps(spec).encode("utf-8")).decode("ascii")
+    assert core._decode_restart_spec(encoded) == spec
+    assert core._decode_restart_spec("") == {}
+    assert core._decode_restart_spec("!!!not-base64!!!") == {}
+    assert core._decode_restart_spec(_b64.b64encode(b'{"args": ["x"]}').decode()) == {'args': ['x']}
+
+
+def test_update_watcher_script_is_valid_python():
+    """看护脚本是运行时生成的，语法错误会让更新永远卡在 waiting。"""
+    source = core._update_watcher_script()
+    compile(source, "<update-watcher>", "exec")
+    assert "watch_and_apply_pending_update" in source
+    assert "sys.path.insert" in source
+
+
+def test_cli_update_status_without_pending(capsys):
+    code = core._cli_main(["update-status"])
+    payload = json.loads(capsys.readouterr().out.strip())
+    assert code == 0 and payload["ok"] is True
+    assert payload["data"] == {"present": False}
+
+
+def test_cli_stage_source_reports_clean_error(capsys, tmp_path):
+    code = core._cli_main(["stage-source", str(tmp_path / "missing")])
+    payload = json.loads(capsys.readouterr().out.strip())
+    assert code == 1 and payload["ok"] is False
+    assert "不存在" in payload["error"]
+
+
+def test_resume_pending_update_respawns_watcher(monkeypatch, tmp_path):
+    """目录被占用导致应用失败后：保留暂存目录，可「重试应用」重新挂看护进程。"""
+    _target, _staged = _stage_fake_update(monkeypatch, tmp_path)
+    # 模拟一次「被占用」失败：状态保持 waiting，错误留在清单里
+    core._set_pending_status("waiting", error="目录仍被其他进程占用")
+    killed = []
+    monkeypatch.setattr(core.os, "kill", lambda pid, sig: killed.append(pid))
+    monkeypatch.setattr(core, "_spawn_update_watcher", lambda manifest_path: 5555)
+    result = core.resume_pending_update()
+    assert result["ok"] is True and result["resumed"] is True
+    assert result["watcher_pid"] == 5555
+    assert killed == [4321], "重试前要先结束旧看护进程"
+    status = core.pending_update_status()
+    assert status["status"] == "waiting"
+    assert status["error"] == "", "重试时要清掉上一次的错误"
+    assert status["watcher_pid"] == 5555
+    assert status["can_retry"] is True
+
+
+def test_resume_pending_update_rejects_missing_staging(monkeypatch, tmp_path):
+    target, staged = _stage_fake_update(monkeypatch, tmp_path)
+    import shutil as _shutil
+    _shutil.rmtree(staged["staging"], ignore_errors=True)
+    with pytest.raises(RuntimeError):
+        core.resume_pending_update()
+
+
+def test_occupied_failure_keeps_staging_for_retry(monkeypatch, tmp_path):
+    """目录被占用时不能标记 failed：暂存更新要留着，用户关掉占用进程后能重试。"""
+    target, staged = _stage_fake_update(monkeypatch, tmp_path)
+    original_move = core.shutil.move
+
+    def fake_move(src, dst):
+        if Path(src) == target:
+            raise OSError("目标目录仍被其他进程占用（模拟）")
+        return original_move(src, dst)
+
+    monkeypatch.setattr(core.shutil, "move", fake_move)
+    monkeypatch.setattr(core, "_UPDATE_SWAP_RETRY", 0.05)
+    monkeypatch.setattr(core.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(core, "_run_pnpm_step", lambda t, args, log, what: None)
+    with pytest.raises(RuntimeError):
+        core.apply_pending_update()
+    status = core.pending_update_status()
+    assert status["status"] == "waiting", "被占用应可重试，不能判死刑"
+    assert status["can_retry"] is True
+    assert "占用" in status["error"]
+    assert Path(staged["staging"]).is_dir()
+
+
+def test_status_can_retry_false_after_cancel(monkeypatch, tmp_path):
+    _target, _staged = _stage_fake_update(monkeypatch, tmp_path)
+    monkeypatch.setattr(core.os, "kill", lambda pid, sig: None)
+    core.cancel_pending_update()
+    status = core.pending_update_status()
+    assert status["status"] == "canceled"
+    assert status["can_retry"] is False
+
+
+def test_cli_resume_staged_roundtrip(monkeypatch, tmp_path, capsys):
+    _target, _staged = _stage_fake_update(monkeypatch, tmp_path)
+    monkeypatch.setattr(core.os, "kill", lambda pid, sig: None)
+    monkeypatch.setattr(core, "_spawn_update_watcher", lambda manifest_path: 7777)
+    capsys.readouterr()  # 丢掉暂存阶段的普通日志
+    code = core._cli_main(["resume-staged"])
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert code == 0 and payload["ok"] is True
+    assert payload["data"]["watcher_pid"] == 7777
+
+

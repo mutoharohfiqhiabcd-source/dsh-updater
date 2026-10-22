@@ -1,4 +1,4 @@
-v0.9.0 发布说明 —— **上架 npm + 插件包名迁移（安装地址不变）**
+v0.10.0 发布说明 —— **在 DSH 插件里直接更新 DSH**
 
 > 本文件是「最新一版」的更新说明，发布新版本前请改成当版内容。
 > GitHub Actions 在推送 `v*` tag 时会把这个文件的内容作为 Release 说明（`body_path`）。
@@ -8,108 +8,108 @@ v0.9.0 发布说明 —— **上架 npm + 插件包名迁移（安装地址不�
 | 名称 | 链接 |
 | --- | --- |
 | **本仓库（桌面版 + DSH 插件本体）** | <https://github.com/mutoharohfiqhiabcd-source/dsh-updater> |
-| **npm 包页（v0.9.0 起）** | <https://www.npmjs.com/package/dsh-updater-plugin> |
+| **npm 包页** | <https://www.npmjs.com/package/dsh-updater-plugin> |
 | DSH 官方仓库（插件宿主） | <https://github.com/deepseek-ai/deepseek-harness> |
 | 最新 Release 下载 | <https://github.com/mutoharohfiqhiabcd-source/dsh-updater/releases/latest> |
 | 功能介绍推文 | <https://x.com/0ncv2l/status/2106351434749161735> |
 
-## 📦 这一版：插件上了 npm，包名改成 `dsh-updater-plugin`
-
-npm 上的 `dsh-updater` 这个名字**已经被别人的同名插件占用**（不是本仓库），
-所以本版把包名改成 **`dsh-updater-plugin`** 并正式发布到 npm。
-
-**GitHub 安装地址完全没变**（仓库名还是 `dsh-updater`），只是包的内部名字变了：
-
-| 项目 | 之前 | 现在 |
-|---|---|---|
-| GitHub 安装 spec | `github:mutoharohfiqhiabcd-source/dsh-updater` | **不变** |
-| npm 安装 spec | （没有） | **`dsh-updater-plugin`** |
-| 插件在 DSH 里显示的名字 | `dsh-updater` | `dsh-updater-plugin` |
-| 桌面 EXE / 源码版 zip | 不变 | 不变（版本号跟着升到 0.9.0） |
-
-**已经在用旧版插件的**：卸载旧插件 → 按下面任一方式重装 → **重启 DSH**。
-（DSH 的插件升级本来就必须重启，「旧名 + 新名」也不建议同时装。）
-
-## 📥 安装 / 升级
-
-### DSH 网页插件（两种方式任选）
+安装（二选一，装完**重启 DSH**）：
 
 ```bat
-:: 方式 A：从 npm 安装（v0.9.0 起可用）
+:: 从 npm 安装
 dsh plugin --profile web add dsh-updater-plugin
 
-:: 方式 B：从 GitHub 安装（一直可用，安装地址没变）
+:: 或从 GitHub 安装（安装地址一直没变）
 dsh plugin --profile web add github:mutoharohfiqhiabcd-source/dsh-updater
 ```
 
-图形界面：DSH 侧边栏 → **插件** → **添加插件** → 填 `dsh-updater-plugin`
-或 `github:mutoharohfiqhiabcd-source/dsh-updater` → 安装 → **重启 DSH**。
+## ⚡ 本版新功能：在插件里点一下就能更新 DSH
 
-### 桌面版
+「检测」面板里，**可更新的源码检出**那一行会多出一个「**更新**」按钮：
 
-| 你用的是 | 怎么升 |
-|---|---|
-| **桌面 EXE** | 下载本页的 `DeepSeekHarnessUpdater.exe` 覆盖旧的 |
-| **源码版 / Python 版** | 下载 `dsh-updater-src-v0.9.0.zip` 解压替换 |
+1. 点两下确认（第一次变「确认更新？」，第二次才执行）；
+2. 插件自动下载官方源码并**暂存**（此时不碰正在运行的 DSH 目录）；
+3. 完成后提示你**关闭 DSH**（同一目录开了多个实例就都关掉）；
+4. 后台看护进程在 DSH 关闭后自动完成：整目录替换 → 按需 `pnpm install` →
+   按需 `pnpm run build` → **自动重新启动 DSH**（约 2~5 分钟）；
+5. 刷新页面，版本已经更新。
 
-> ⚠️ 插件运行在 DSH 主进程内、不受工作区沙箱限制；检测 / 回滚 / 下载 / 启动都会
-> 真实读写磁盘。检测与回滚需要本机有 Python 3.10+，没装时界面会明确提示。
+下载、替换、构建、重启的全过程都有日志（界面里会显示日志路径），
+什么时候该关、关掉之后在干什么，都不用猜。
 
-## ⚡ 顺带回顾：检测已经变快了（v0.8.1 起）
+## 🧠 为什么不能「点完立刻在线替换」
 
-| 场景 | 旧版 | 现在 |
+Windows **不允许**对一个正被其他进程当作工作目录的目录改名（实测 `Move-Item`
+直接报「文件正被另一进程使用」）。而 DSH 的源码检出正是它自己的运行目录，
+所以只能拆成两段：
+
+| 阶段 | 时机 | 做什么 |
 |---|---|---|
-| 5 分钟内重复检测（命中缓存） | 93.6 秒 | **0.52 秒** |
-| 冷启动（真的联网查一次） | 93.6 秒 | **1.7 ~ 6 秒**（取决于网络） |
-| 只查本机安装（离线模式） | 0.35 秒 | 0.43 秒 |
+| ① 暂存 | DSH 运行中（安全） | 下载官方源码 → 解压到目标同级暂存目录 → 写清单、启动看护进程 |
+| ② 应用 | DSH 关闭后（看护进程） | 旧目录改名为备份 → 暂存目录换到位 → 恢复 node_modules/.git → 按需 install/build → 重启 DSH |
 
-原理：多源并发赛跑（GitHub 官方源 + jsDelivr 镜像 + npm 官方源 + npmmirror 镜像 +
-并发重试）、npm 元数据改走 HTTP 接口（去掉 33 秒的 `npm view` 子进程）、
-必需项到手立即返回、结果本地缓存 5 分钟。详见 v0.8.1 的 Release 说明。
+这样替换那一刻磁盘上的文件不会被任何进程占用，也才能保证「构建失败还能回到旧版本」。
 
-## 🖼️ 长这样
+## 🔒 安全设计（都是自动的）
 
-![会话标题栏的三个按钮](https://raw.githubusercontent.com/mutoharohfiqhiabcd-source/dsh-updater/main/images/plugin-01-header-buttons.png)
+- **旧目录整目录备份**：替换前改名成 `*.dsh-bak-时间戳`，更新失败自动回滚；
+- **构建失败自动回滚**：`pnpm run build` 失败会把旧目录换回来，保证重启后一定能用；
+- **目录被占用不判死刑**：如果关闭 DSH 后目录仍被别的实例占用，暂存更新会保留，
+  界面提示「重试应用」——关掉占用进程再点一次即可，**不用重新下载**；
+- **可取消**：暂存后、关闭 DSH 前可随时「取消更新」（会结束看护进程并清理暂存目录）；
+- **换错目标不会乱动手**：应用前重新校验目标仍是 DSH 源码检出、版本与清单一致；
+- 只处理**源码检出**；npm 全局安装与 profile 运行时不在本功能范围。
 
-| 回滚面板（点一次确认、再点一次才执行） | 插件管理页 |
-| --- | --- |
-| ![回滚面板](https://raw.githubusercontent.com/mutoharohfiqhiabcd-source/dsh-updater/main/images/plugin-02-rollback-panel.png) | ![插件管理页](https://raw.githubusercontent.com/mutoharohfiqhiabcd-source/dsh-updater/main/images/plugin-03-plugins-page.png) |
+## 📋 使用步骤
 
-桌面版的样子见 [README](https://github.com/mutoharohfiqhiabcd-source/dsh-updater#界面预览)。
+| 步骤 | 你会看到 |
+|---|---|
+| 1. 检测 → 点「更新」→ 再点「确认更新？」 | 行尾变成「下载中…（可能要几分钟）」 |
+| 2. 下载完成 | 面板顶部出现「更新包已就绪：旧版本 → 新版本」+ 关闭提示 |
+| 3. 关闭 DSH（所有从该目录启动的实例） | ——（DSH 已退出，看护进程接手） |
+| 4. 等待 2~5 分钟 | DSH 会自动重新启动 |
+| 5. 刷新 DSH 页面 → 再点「检测」 | 版本已是最新，顶部显示「上次更新完成」 |
 
-## 🔧 本版改了什么
+> 如果更新失败，DSH 也会被重新启动（旧版本），页面里会显示失败原因与日志路径，
+> 旧版本备份还在，可以用「回滚」按钮退回去。
 
-- `package.json` 包名：`dsh-updater` → **`dsh-updater-plugin`**（npm 发布用）；
-- `cordis.patch.yml` 里 bundle 行引用的模块名同步改成新包名；
-- 网页客户端产物 `lib/client.js` 的模块注册 id 同步改新包名
-  （DSH 的模块系统要求注册 id 等于包名，测试里有断言防漏改）；
-- Host 半边插件名同步改新包名；
-- README / Release 说明补上 npm 安装方式；
-- 新增测试守护：bundle patch 里的模块名必须等于 `package.json` 的包名。
+## 🛠️ 本版改动（技术细节）
 
-> 接口路由 `/dsh-updater/api/*`、会话标题栏的三个按钮、工具名 `dsh_updater`
-> 都**没有变**，行为与 v0.8.1 完全一致。
+- `updater_core.py`：新增 5 个 `--json` 动作 —— `stage-source` / `update-source` /
+  `update-status` / `cancel-staged` / `resume-staged`；暂存、清单、看护进程、
+  替换/回滚、自动重启都在核心层实现，**桌面 GUI 行为不变**；
+- 看护进程用 `DETACHED_PROCESS` + `pythonw` 启动（DSH 退出不会带走它），
+  轮询端口确认 DSH 已关闭后才动手；完成后用原来的 argv / 工作目录重新拉起 DSH；
+- `index.js`：新增 `/update-source`、`/update-status`、`/cancel-update`、
+  `/resume-update` 四个路由；自动识别「目标目录就是当前运行 DSH 的根目录」——
+  是则走暂存流程，否则直接更新；
+- `lib/client.js`：检测面板新增「更新」按钮（两次确认）与待应用更新横幅
+  （就绪 / 应用中 / 完成 / 失败 / 超时 / 取消，含取消与重试按钮），中英文案；
+- 测试 **155 → 175**（新增 20 条：暂存不碰目标目录、应用并保留 node_modules、
+  构建失败回滚、目录被占用保留暂存可重试、取消/重试、看护脚本语法等）。
 
-## ⚙️ 工程改进
+## ⚙️ 说明
 
-- 测试 **154 → 155 项**（新增「包名与 bundle patch 一致性」守护）；
-- CI 继续在 Ubuntu + Windows、Python 3.10 / 3.12 四组矩阵上跑冒烟测试；
-- 打包源码版 zip 时会自动带上新包名与新文档。
+- 需要本机 Python 3.10+（插件本来就用它做检测/回滚；没有 Python 时更新按钮不可用）；
+- `pnpm install` 只在 `pnpm-lock.yaml` 变化时执行；
+  `pnpm run build` 只在目标目录本来就有 `apps/cli/lib`（说明你用构建产物启动 DSH）时执行；
+- 首次构建可能比较慢，请耐心等看护进程日志里的「已重新启动 DSH」。
 
 ## 📦 本版资产
 
 | 文件 | 说明 |
 |---|---|
 | `DeepSeekHarnessUpdater.exe` | Windows 独立版桌面工具（无需 Python）。含 v0.8.1 的检测提速 |
-| `dsh-updater-src-v0.9.0.zip` | Python 源码版：解压后双击 `启动更新器.bat`，或运行 `python updater_gui.pyw`（需 Python 3.10+，含 tkinter）；同时附带 DSH 插件文件 |
+| `dsh-updater-src-v0.10.0.zip` | Python 源码版：解压后双击 `启动更新器.bat`，或运行 `python updater_gui.pyw`（需 Python 3.10+，含 tkinter）；同时附带 DSH 插件文件 |
 | `SHA256.txt` | EXE 的 SHA256 校验值 |
 
 > 网页版插件不在这些资产里：从 npm（`dsh-updater-plugin`）或本仓库直接安装即可。
 
 ## ⚠️ 已知限制
 
-- 网页插件升级需要「卸载 → 重新安装」并**重启 DSH**（DSH 的插件页明说不支持自动更新）
+- 只支持「源码检出」的在线更新；npm 全局与 profile 运行时请用桌面版 / 手动处理
+- 同一目录启动了多个 DSH 实例时，更新前需要把它们**全部关闭**
+- 网页插件升级仍需「卸载 → 重新安装」并**重启 DSH**（DSH 插件页不支持自动更新）
 - 断网时只显示本地结果，官方版本一栏会提示查询失败
 - 回滚窗口最旧的一个备份若读不出 `package.json` 的版本，会显示「回到 备份版本」
-- 切换语言后若个别文字仍显示为其它语言，点一次「🔄 重新检测」刷新即可
 - 「使用 GPU 加速」目前仅记录偏好：DSH 尚未提供 GPU 加速选项

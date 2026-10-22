@@ -13,12 +13,14 @@ updater_core.py —— DeepSeek Harness 自动检测与更新器（纯逻辑层�
 """
 from __future__ import annotations
 
+import base64
 import copy
 import datetime
 import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -2261,6 +2263,658 @@ def update_source_from_zip(
 
 
 # ---------------------------------------------------------------------------
+# 插件内更新 DSH：先「暂存」，DSH 关闭后由后台看护进程应用
+# ---------------------------------------------------------------------------
+# 场景：DSH 网页插件必须从 DSH 正在运行的进程内部发起更新；而源码更新要整目录
+# 改名 —— 实测 Windows 不允许改一个正被其他进程当作工作目录的目录（Move-Item
+# 报「文件正被另一进程使用」）。所以拆成两段：
+#   ① 暂存（DSH 运行中，安全）：下载官方源码 → 解压到目标同级暂存目录 → 写清单
+#   ② 应用（DSH 关闭后，后台看护进程）：整目录替换（旧目录留作备份）→ 需要时
+#      pnpm install / pnpm run build → 重新拉起 DSH
+# 看护进程用 DETACHED_PROCESS 启动，DSH 退出不会带走它；它自己轮询端口，等 DSH
+# 关掉之后再动手。
+#
+# 本节日志只写日志文件（排错用），刻意不经过 t()：插件界面上的文案由客户端按
+# 结构化字段自己生成，`--json` 结果保持机器可读。
+PENDING_SCHEMA = 1
+DEFAULT_WEB_PORT = 3080
+_UPDATE_WAIT_TIMEOUT = 1800.0     # 等待 DSH 关闭的最长时间（30 分钟）
+_UPDATE_SWAP_RETRY = 120.0        # 目录仍被占用时的重试窗口（秒）
+
+_UPDATE_WATCHER_TEMPLATE = '''# -*- coding: utf-8 -*-
+"""dsh-updater 后台看护进程（由插件在暂存更新时自动生成）。
+
+用法：python -X utf8 update-watcher.py <manifest.json> <updater_core.py 所在目录>
+
+它只做一件事：等 DSH 关闭（轮询端口）→ 让 updater_core 应用暂存更新并重启 DSH。
+用 DETACHED_PROCESS 启动，所以父进程（DSH）退出不会带走它。
+"""
+import json
+import sys
+import traceback
+from pathlib import Path
+
+
+def main() -> int:
+    manifest_path = Path(sys.argv[1])
+    sys.path.insert(0, sys.argv[2])
+    import updater_core
+    result = updater_core.watch_and_apply_pending_update(manifest_path)
+    return 0 if result.get("ok") else 1
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except Exception:
+        # 兜底：脚本本身出错时，把 traceback 也写进清单里的日志文件
+        try:
+            manifest = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8-sig"))
+            log_path = Path(manifest.get("log_file") or (sys.argv[1] + ".log"))
+            with open(log_path, "a", encoding="utf-8") as handle:
+                handle.write(traceback.format_exc() + "\\n")
+        except Exception:
+            pass
+        sys.exit(1)
+'''
+
+
+def pending_update_file() -> Path:
+    """待应用更新的清单文件（与设置同目录）。"""
+    return _settings_dir() / "pending-update.json"
+
+
+def update_watcher_file() -> Path:
+    """看护脚本路径（每次暂存时重写；内容只依赖 updater_core）。"""
+    return _settings_dir() / "update-watcher.py"
+
+
+def update_watcher_log_file() -> Path:
+    """看护进程日志（等待、替换、构建、重启都会写到这里）。"""
+    return _settings_dir() / "update-watcher.log"
+
+
+def _now_stamp() -> str:
+    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _watcher_log(log_file: Path, message: str) -> None:
+    """向看护日志追加一行；失败静默（日志永远不能拖垮更新）。"""
+    try:
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(log_file, "a", encoding="utf-8") as handle:
+            handle.write(f"[{_now_stamp()}] {message}\n")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _write_pending_update(manifest: dict) -> bool:
+    try:
+        target = pending_update_file()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_name(target.name + ".tmp")
+        tmp.write_text(json.dumps(manifest, ensure_ascii=False, indent=2, default=str),
+                       encoding="utf-8")
+        os.replace(tmp, target)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def load_pending_update() -> dict:
+    """读取待应用更新清单；不存在/损坏时返回 {}。"""
+    data = _read_json(pending_update_file())
+    return data if isinstance(data, dict) and data.get("schema") == PENDING_SCHEMA else {}
+
+
+def _set_pending_status(status: str, **fields) -> dict:
+    """更新清单里的状态（waiting → applying → done/failed/expired/canceled）。"""
+    manifest = load_pending_update()
+    if not manifest:
+        return {}
+    manifest["status"] = status
+    manifest["updated"] = _now_stamp()
+    manifest.update(fields)
+    _write_pending_update(manifest)
+    return manifest
+
+
+def _update_watcher_script() -> str:
+    """生成看护脚本的源码（写盘后由 pythonw/python 脱离父进程执行）。"""
+    return _UPDATE_WATCHER_TEMPLATE
+
+
+def _auto_update_steps(target_dir: Path, new_root: Path) -> tuple:
+    """推断这次更新要不要 pnpm install / pnpm run build。
+
+    - build：目标目录里存在 apps/cli/lib 说明用户是从**构建产物**启动 DSH 的，
+      替换源码后必须重新构建，否则重启还是旧代码；
+    - install：新旧 pnpm-lock.yaml 内容不同才需要（依赖变了）。
+    """
+    run_build = (target_dir / "apps" / "cli" / "lib").is_dir()
+    run_install = False
+    try:
+        # 先统一行尾再比：Windows 上 git 检出可能是 CRLF、官方 zip 是 LF，
+        # 直接比字节会把「其实没变」误判成依赖变化，白白多跑一次 pnpm install。
+        old_lock = (target_dir / "pnpm-lock.yaml").read_bytes().replace(b"\r\n", b"\n")
+        new_lock = (new_root / "pnpm-lock.yaml").read_bytes().replace(b"\r\n", b"\n")
+        run_install = old_lock != new_lock
+    except Exception:  # noqa: BLE001
+        run_install = False
+    return run_install, run_build
+
+
+def _download_source_staging(target_dir: Path, log=print) -> dict:
+    """下载官方源码并解压到 target 同级的暂存目录（同分区，便于之后原子改名）。"""
+    ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    staging = target_dir.parent / f".{target_dir.name}.dsh-stage-{ts}"
+    tmp = Path(tempfile.mkdtemp(prefix="dsh-stage-"))
+    try:
+        zip_path = tmp / "deepseek-harness.zip"
+        extract_dir = tmp / "extract"
+        extract_dir.mkdir()
+        log(f"开始下载官方源码：{ZIP_URL}")
+        download_file(ZIP_URL, zip_path, log=log)
+        new_root = _find_zip_root(zip_path, extract_dir, log=log)
+        new_version = _read_dir_version(new_root)
+        if not new_version:
+            raise RuntimeError("下载的源码包缺少版本号")
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+        shutil.move(str(new_root), str(staging))
+        log(f"官方源码已暂存：{staging}（版本 {new_version}）")
+        return {"staging": staging, "new_version": new_version}
+    except Exception:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _spawn_update_watcher(manifest_path: Path) -> int:
+    """启动脱离 DSH 的看护进程，返回 pid（失败返回 0）。
+
+    DETACHED_PROCESS + 无控制台解释器（pythonw）：DSH 退出后它继续干活。
+    """
+    script = update_watcher_file()
+    try:
+        script.parent.mkdir(parents=True, exist_ok=True)
+        script.write_text(_update_watcher_script(), encoding="utf-8")
+    except Exception as e:  # noqa: BLE001
+        _watcher_log(update_watcher_log_file(), f"写入看护脚本失败：{type(e).__name__}: {e}")
+        return 0
+    python = sys.executable or "python"
+    candidates = [python]
+    if os.name == "nt" and python.lower().endswith("python.exe"):
+        candidates.insert(0, python[: -len("python.exe")] + "pythonw.exe")
+    core_dir = str(Path(__file__).resolve().parent)
+    log_path = update_watcher_log_file()
+    last_error = ""
+    for exe in candidates[:2]:
+        try:
+            if not Path(exe).is_file():
+                continue
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_handle = open(log_path, "a", encoding="utf-8")
+            kwargs = {
+                "stdin": subprocess.DEVNULL,
+                "stdout": log_handle,
+                "stderr": subprocess.STDOUT,
+                "cwd": str(script.parent),
+                "close_fds": True,
+            }
+            if os.name == "nt":
+                kwargs["creationflags"] = (subprocess.DETACHED_PROCESS
+                                           | subprocess.CREATE_NEW_PROCESS_GROUP)
+            proc = subprocess.Popen(
+                [exe, "-X", "utf8", str(script), str(manifest_path), core_dir], **kwargs)
+            log_handle.close()
+            return int(proc.pid or 0)
+        except Exception as e:  # noqa: BLE001
+            last_error = f"{type(e).__name__}: {e}"
+    _watcher_log(log_path, f"启动看护进程失败：{last_error or '没有可用的 Python 解释器'}")
+    return 0
+
+
+def _cleanup_staging(manifest: dict) -> None:
+    try:
+        staging = Path(str(manifest.get("staging") or ""))
+        if staging and staging.is_dir():
+            shutil.rmtree(staging, ignore_errors=True)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def stage_source_update(target_dir: Path, restart: dict | None = None,
+                        port: int = DEFAULT_WEB_PORT,
+                        wait_timeout: float = _UPDATE_WAIT_TIMEOUT,
+                        log=print) -> dict:
+    """阶段一：下载官方源码到暂存目录，并启动看护进程等 DSH 关闭后应用。
+
+    返回结构化结果（插件客户端自己出文案）：
+      { ok, staged, target, staging, old_version, new_version,
+        run_install, run_build, wait_port, restart, log_file, watcher_pid }
+    """
+    target_dir = Path(target_dir)
+    if not target_dir.is_dir():
+        raise RuntimeError(f"目标目录不存在：{target_dir}")
+    if not _is_source_checkout(target_dir):
+        raise RuntimeError("该目录不是 DeepSeek Harness 源码检出")
+    # 旧任务先取消（避免两个看护进程抢同一个目标）
+    previous = load_pending_update()
+    if previous:
+        try:
+            cancel_pending_update(log=lambda *_: None)
+        except Exception:  # noqa: BLE001
+            pass
+    old_version = _read_dir_version(target_dir)
+    log(f"当前版本：{old_version or '未知'}；先下载官方源码到暂存目录…")
+    got = _download_source_staging(target_dir, log=log)
+    staging = got["staging"]
+    new_version = got["new_version"]
+    run_install, run_build = _auto_update_steps(target_dir, staging)
+    restart_spec = dict(restart) if isinstance(restart, dict) else {}
+    log_path = update_watcher_log_file()
+    manifest = {
+        "schema": PENDING_SCHEMA,
+        "created": _now_stamp(),
+        "updated": _now_stamp(),
+        "status": "waiting",
+        "target": str(target_dir),
+        "staging": str(staging),
+        "old_version": old_version,
+        "new_version": new_version,
+        "run_install": bool(run_install),
+        "run_build": bool(run_build),
+        "wait_port": int(port),
+        "wait_timeout": float(wait_timeout),
+        "restart": restart_spec,
+        "log_file": str(log_path),
+        "watcher_pid": 0,
+        "error": "",
+    }
+    _write_pending_update(manifest)
+    pid = _spawn_update_watcher(pending_update_file())
+    manifest["watcher_pid"] = pid
+    _write_pending_update(manifest)
+    if not pid:
+        _watcher_log(log_path, "看护进程没起来：更新已暂存，但关闭 DSH 后不会自动应用。")
+    else:
+        _watcher_log(log_path,
+                     f"看护进程已启动（pid {pid}）：等待端口 {port} 关闭后应用更新。")
+    log(f"更新已暂存：{old_version or '未知'} → {new_version}；关闭 DSH 后将自动替换并重启。")
+    return {
+        "ok": True,
+        "staged": True,
+        "target": str(target_dir),
+        "staging": str(staging),
+        "old_version": old_version,
+        "new_version": new_version,
+        "run_install": bool(run_install),
+        "run_build": bool(run_build),
+        "wait_port": int(port),
+        "restart": bool(restart_spec),
+        "log_file": str(log_path),
+        "watcher_pid": pid,
+    }
+
+
+def _wait_dir_free(target_dir: Path, log) -> None:
+    """占位兼容：真正的重试已经并入 _apply_staged_tree 的换目录循环。"""
+    return None
+
+
+def _apply_staged_tree(target_dir: Path, staging: Path, old_version: str,
+                       new_version: str, run_install: bool, run_build: bool,
+                       log=print) -> dict:
+    """阶段二核心：把暂存源码换进目标目录（备份旧目录，保留 node_modules/.git）。
+
+    失败时自动回滚到旧版本；成功返回 {ok, backup, new_version, run_install, run_build}。
+    """
+    target_dir = Path(target_dir)
+    staging = Path(staging)
+    if not target_dir.is_dir():
+        raise RuntimeError(f"目标目录不存在：{target_dir}")
+    if not staging.is_dir():
+        raise RuntimeError(f"暂存目录不存在（更新包可能已被清理）：{staging}")
+    if not _is_source_checkout(staging):
+        raise RuntimeError("暂存目录不是有效的 DeepSeek Harness 源码")
+    staged_version = _read_dir_version(staging)
+    if new_version and staged_version and staged_version != new_version:
+        raise RuntimeError(f"暂存版本不符（清单 {new_version}，实际 {staged_version}）")
+    ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup_dir = target_dir.parent / f"{target_dir.name}.dsh-bak-{ts}"
+    log(f"备份原目录 → {backup_dir}")
+    # 目标目录可能还被别的进程当作工作目录（别的 DSH 实例/终端没关）：
+    # 直接重试「真正的改名操作」，最多等 _UPDATE_SWAP_RETRY 秒。
+    deadline = time.monotonic() + _UPDATE_SWAP_RETRY
+    while True:
+        try:
+            shutil.move(str(target_dir), str(backup_dir))
+            break
+        except OSError as e:
+            if time.monotonic() >= deadline:
+                raise RuntimeError(
+                    "目标目录仍被其他进程占用（可能还有其他 DSH 实例或终端从该目录启动）。"
+                    f" 请全部关闭后再试：{e}") from e
+            log(f"目录仍被占用（{e}），3 秒后重试…")
+            time.sleep(3)
+    try:
+        shutil.move(str(staging), str(target_dir))
+        for keep in _KEEP_DIRS:
+            src = backup_dir / keep
+            if src.exists():
+                log(f"保留 {keep}（移回新目录）…")
+                shutil.move(str(src), str(target_dir / keep))
+        if run_install:
+            log("依赖可能有变化，执行 pnpm install …")
+            _run_pnpm_step(target_dir, ["install"], log, "pnpm install")
+        if run_build:
+            log("执行 pnpm run build（源码替换后必须重建构建产物）…")
+            _run_pnpm_step(target_dir, ["run", "build"], log, "pnpm run build")
+    except Exception as e:  # noqa: BLE001
+        log(f"应用更新失败，回滚：{type(e).__name__}: {e}")
+        rollback_ok = False
+        try:
+            for keep in _KEEP_DIRS:
+                src = target_dir / keep
+                dst = backup_dir / keep
+                if src.exists() and not dst.exists():
+                    shutil.move(str(src), str(dst))
+            if target_dir.exists():
+                shutil.rmtree(target_dir, ignore_errors=True)
+            shutil.move(str(backup_dir), str(target_dir))
+            rollback_ok = True
+            log("已回滚到旧版本。")
+        except Exception as e2:  # noqa: BLE001
+            log(f"回滚失败（请手动从备份恢复）：{type(e2).__name__}: {e2}")
+        raise RuntimeError(
+            f"更新失败{'，已回滚到旧版本' if rollback_ok else '，回滚也失败'}：{e}") from e
+    append_history({"kind": "source", "path": str(target_dir),
+                    "old_version": old_version, "new_version": new_version,
+                    "backup": str(backup_dir)})
+    log(f"更新完成：{old_version or '旧版本'} → {new_version}（旧版本备份：{backup_dir}）")
+    return {"ok": True, "new_version": new_version, "old_version": old_version,
+            "backup": str(backup_dir), "run_install": run_install,
+            "run_build": run_build}
+
+
+def update_source_immediate(target_dir: Path, log=print) -> dict:
+    """目标目录**没有被运行中的 DSH 占用**时：暂存并立即应用（不等待、不重启）。"""
+    target_dir = Path(target_dir)
+    if not target_dir.is_dir():
+        raise RuntimeError(f"目标目录不存在：{target_dir}")
+    if not _is_source_checkout(target_dir):
+        raise RuntimeError("该目录不是 DeepSeek Harness 源码检出")
+    old_version = _read_dir_version(target_dir)
+    got = _download_source_staging(target_dir, log=log)
+    staging = got["staging"]
+    new_version = got["new_version"]
+    run_install, run_build = _auto_update_steps(target_dir, staging)
+    try:
+        result = _apply_staged_tree(target_dir, staging, old_version, new_version,
+                                    run_install, run_build, log=log)
+    finally:
+        if staging.is_dir():
+            shutil.rmtree(staging, ignore_errors=True)
+    result.update({"applied": True, "staged": False, "old_version": old_version,
+                   "run_install": run_install, "run_build": run_build})
+    return result
+
+
+def apply_pending_update(manifest_path: Path | None = None, log=None) -> dict:
+    """阶段二：按清单应用暂存更新（假定 DSH 已关闭）。失败自动回滚。"""
+    manifest_path = Path(manifest_path or pending_update_file())
+    manifest = _read_json(manifest_path)
+    log_file = Path(str(manifest.get("log_file") or update_watcher_log_file()))
+    logger = log or (lambda message: _watcher_log(log_file, str(message)))
+    if not manifest or manifest.get("schema") != PENDING_SCHEMA:
+        raise RuntimeError("没有可应用的更新清单")
+    status = manifest.get("status")
+    if status != "waiting":
+        raise RuntimeError(f"更新状态不是 waiting（当前 {status}）")
+    target_dir = Path(str(manifest.get("target") or ""))
+    staging = Path(str(manifest.get("staging") or ""))
+    old_version = str(manifest.get("old_version") or "")
+    new_version = str(manifest.get("new_version") or "")
+    if not target_dir.is_dir():
+        raise RuntimeError(f"目标目录不存在：{target_dir}")
+    if not _is_source_checkout(target_dir):
+        raise RuntimeError("目标目录已不是 DeepSeek Harness 源码检出")
+    current_version = _read_dir_version(target_dir)
+    if old_version and current_version and current_version != old_version:
+        raise RuntimeError(
+            f"目标版本已变化（清单 {old_version}，实际 {current_version}），放弃本次更新")
+    _set_pending_status("applying")
+    logger(f"开始应用更新：{old_version or '未知'} → {new_version}")
+    try:
+        result = _apply_staged_tree(target_dir, staging, old_version, new_version,
+                                    bool(manifest.get("run_install")),
+                                    bool(manifest.get("run_build")), log=logger)
+    except Exception as e:  # noqa: BLE001
+        message = f"{type(e).__name__}: {e}"
+        # 目录仍被别的进程占用属于「可以稍后重试」的情况：暂存目录还在，
+        # 状态退回 waiting（附错误说明），用户关掉占用进程后可点「重试应用」。
+        occupied = ("占用" in str(e) or "occupied" in str(e).lower()) and staging.is_dir()
+        if occupied:
+            _set_pending_status("waiting", error=message)
+            logger("目标目录仍被占用：保留暂存更新，关闭占用进程后可重试应用。")
+        else:
+            _set_pending_status("failed", error=message, finished=_now_stamp())
+            logger(f"更新失败：{message}")
+        raise
+    _set_pending_status("done", finished=_now_stamp(), backup=result.get("backup", ""))
+    logger("更新已应用，状态已标记 done。")
+    return result
+
+
+def resume_pending_update(log=print) -> dict:
+    """重新启动看护进程，把「等待中/失败但仍保留暂存」的更新再试一次。"""
+    manifest = load_pending_update()
+    if not manifest:
+        raise RuntimeError("没有待应用的更新")
+    status = manifest.get("status")
+    if status == "applying":
+        raise RuntimeError("更新正在应用中，无法重试")
+    staging = Path(str(manifest.get("staging") or ""))
+    if not staging.is_dir():
+        raise RuntimeError("暂存目录已不存在，请重新点击「更新」下载一次")
+    pid = int(manifest.get("watcher_pid") or 0)
+    if pid:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except Exception:  # noqa: BLE001
+            pass
+    _set_pending_status("waiting", error="", finished="")
+    new_pid = _spawn_update_watcher(pending_update_file())
+    manifest = load_pending_update()
+    manifest["watcher_pid"] = new_pid
+    _write_pending_update(manifest)
+    log(f"已重新启动看护进程（pid {new_pid}）：关闭 DSH 后会再次尝试应用更新。")
+    return {"ok": True, "resumed": True, "watcher_pid": new_pid,
+            "old_version": str(manifest.get("old_version") or ""),
+            "new_version": str(manifest.get("new_version") or "")}
+
+
+def _restart_dsh_after_update(restart: dict, port: int, logger) -> bool:
+    """按清单里的启动信息重新拉起 DSH（失败只记日志，不抛异常）。"""
+    if not isinstance(restart, dict):
+        logger("没有可用的重启信息，请手动启动 DSH。")
+        return False
+    exe = str(restart.get("execPath") or "")
+    args = [str(item) for item in (restart.get("args") or [])]
+    cwd = restart.get("cwd")
+    if not exe or not Path(exe).is_file():
+        logger(f"无法自动重启 DSH：可执行文件不存在（{exe or '空'}），请手动启动。")
+        return False
+    if cwd and not Path(str(cwd)).is_dir():
+        logger(f"原工作目录不存在（{cwd}），改为不指定工作目录。")
+        cwd = None
+    log_path = update_watcher_log_file()
+    try:
+        log_handle = open(log_path, "a", encoding="utf-8")
+        kwargs = {
+            "cwd": str(cwd) if cwd else None,
+            "stdin": subprocess.DEVNULL,
+            "stdout": log_handle,
+            "stderr": subprocess.STDOUT,
+            "close_fds": True,
+        }
+        if os.name == "nt":
+            kwargs["creationflags"] = (subprocess.DETACHED_PROCESS
+                                       | subprocess.CREATE_NEW_PROCESS_GROUP)
+        proc = subprocess.Popen([exe, *args], **kwargs)
+        log_handle.close()
+    except Exception as e:  # noqa: BLE001
+        logger(f"自动重启 DSH 失败：{type(e).__name__}: {e}；请手动启动。")
+        return False
+    logger(f"已重新启动 DSH（pid {proc.pid}）；最多等 60 秒让它监听端口 {port}…")
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        if _is_port_open(port):
+            logger(f"DSH 已就绪：http://127.0.0.1:{port}")
+            return True
+        time.sleep(2)
+    logger("DSH 已启动，但 60 秒内没等到端口监听；请查看日志或手动打开。")
+    return True
+
+
+def watch_and_apply_pending_update(manifest_path: Path | None = None) -> dict:
+    """看护进程主流程：等 DSH 关闭 → 应用更新 → 重新启动 DSH。"""
+    manifest_path = Path(manifest_path or pending_update_file())
+    manifest = _read_json(manifest_path)
+    log_file = Path(str(manifest.get("log_file") or update_watcher_log_file()))
+    logger = lambda message: _watcher_log(log_file, str(message))  # noqa: E731
+    port = int(manifest.get("wait_port") or DEFAULT_WEB_PORT)
+    timeout = float(manifest.get("wait_timeout") or _UPDATE_WAIT_TIMEOUT)
+    logger(f"看护进程启动（pid {os.getpid()}）：等待端口 {port} 关闭，最多 {timeout / 60:.0f} 分钟。")
+    closed = 0
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if _is_port_open(port):
+            closed = 0
+            time.sleep(2)
+            continue
+        closed += 1
+        if closed >= 2:
+            break
+        time.sleep(1)
+    else:
+        logger("等待超时：DSH 一直没关闭，放弃本次更新。")
+        _set_pending_status("expired", error="等待 DSH 关闭超时", finished=_now_stamp())
+        _cleanup_staging(manifest)
+        return {"ok": False, "reason": "timeout"}
+    logger("DSH 已关闭，2 秒后开始应用更新…")
+    time.sleep(2)
+    applied = False
+    error = ""
+    try:
+        apply_pending_update(manifest_path, log=logger)
+        applied = True
+    except Exception as e:  # noqa: BLE001
+        error = f"{type(e).__name__}: {e}"
+        logger(f"应用更新失败：{error}")
+    restarted = _restart_dsh_after_update(manifest.get("restart") or {}, port, logger)
+    return {"ok": applied, "applied": applied, "restarted": restarted, "error": error}
+
+
+def pending_update_status() -> dict:
+    """给插件界面用的待应用更新状态（含日志尾部）；没有清单时 present=False。"""
+    manifest = load_pending_update()
+    if not manifest:
+        return {"present": False}
+    log_file = Path(str(manifest.get("log_file") or update_watcher_log_file()))
+    staging = Path(str(manifest.get("staging") or "")) if manifest.get("staging") else None
+    status = str(manifest.get("status") or "")
+    tail = []
+    try:
+        lines = log_file.read_text(encoding="utf-8", errors="replace").splitlines()
+        tail = lines[-40:]
+    except Exception:  # noqa: BLE001
+        tail = []
+    return {
+        "present": True,
+        "status": status,
+        "can_retry": bool(staging is not None and staging.is_dir()
+                          and status in ("waiting", "failed")),
+        "created": str(manifest.get("created") or ""),
+        "updated": str(manifest.get("updated") or ""),
+        "finished": str(manifest.get("finished") or ""),
+        "target": str(manifest.get("target") or ""),
+        "staging": str(manifest.get("staging") or ""),
+        "old_version": str(manifest.get("old_version") or ""),
+        "new_version": str(manifest.get("new_version") or ""),
+        "run_install": bool(manifest.get("run_install")),
+        "run_build": bool(manifest.get("run_build")),
+        "wait_port": int(manifest.get("wait_port") or DEFAULT_WEB_PORT),
+        "restart": bool(manifest.get("restart")),
+        "watcher_pid": int(manifest.get("watcher_pid") or 0),
+        "backup": str(manifest.get("backup") or ""),
+        "error": str(manifest.get("error") or ""),
+        "log_file": str(log_file),
+        "log_tail": tail,
+    }
+
+
+def cancel_pending_update(log=print) -> dict:
+    """取消待应用的更新：杀掉看护进程、删掉暂存目录、状态置 canceled。
+
+    正在应用（applying）时拒绝取消，避免把目录换到一半。
+    """
+    manifest = load_pending_update()
+    if not manifest:
+        return {"ok": True, "canceled": False, "message": "没有待应用的更新"}
+    status = manifest.get("status")
+    if status == "applying":
+        raise RuntimeError("更新正在应用中，无法取消")
+    if status not in ("waiting", "failed"):
+        # done / expired / canceled：没有东西可取消，静默返回
+        return {"ok": True, "canceled": False,
+                "message": f"更新状态为 {status}，无需取消"}
+    pid = int(manifest.get("watcher_pid") or 0)
+    if pid:
+        try:
+            os.kill(pid, signal.SIGTERM)
+            log(f"已结束看护进程（pid {pid}）")
+        except Exception:  # noqa: BLE001
+            pass
+    _cleanup_staging(manifest)
+    _set_pending_status("canceled", finished=_now_stamp())
+    log("已取消待应用的更新并清理暂存目录。")
+    return {"ok": True, "canceled": True, "message": "已取消"}
+
+
+def _decode_restart_spec(raw: str) -> dict:
+    """解出 JS 传来的 base64 JSON 重启信息（execPath/args/cwd）；坏数据返回 {}。"""
+    text = str(raw or "").strip()
+    if not text:
+        return {}
+    try:
+        data = json.loads(base64.b64decode(text.encode("ascii")).decode("utf-8"))
+    except Exception:  # noqa: BLE001
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    spec = {}
+    if isinstance(data.get("execPath"), str):
+        spec["execPath"] = data["execPath"]
+    if isinstance(data.get("args"), list):
+        spec["args"] = [str(item) for item in data["args"]]
+    if isinstance(data.get("cwd"), str):
+        spec["cwd"] = data["cwd"]
+    return spec
+
+
+def _parse_port_arg(argv: list, default: int = DEFAULT_WEB_PORT) -> int:
+    """从 CLI 参数里取 `--port N`（没写就用默认 3080）。"""
+    try:
+        idx = argv.index("--port")
+        return int(argv[idx + 1])
+    except Exception:  # noqa: BLE001
+        return default
+
+
+# ---------------------------------------------------------------------------
 # npm 全局更新
 # ---------------------------------------------------------------------------
 def running_node_count() -> int:
@@ -2691,7 +3345,9 @@ def _selftest() -> int:
 # ---------------------------------------------------------------------------
 # JSON CLI —— 供 DSH 插件等外部调用（`python updater_core.py --json <动作>`）
 # ---------------------------------------------------------------------------
-CLI_ACTIONS = ("detect", "rollback-targets", "rollback-source", "rollback-npm", "version")
+CLI_ACTIONS = ("detect", "version", "rollback-targets", "rollback-source", "rollback-npm",
+               "stage-source", "update-source", "update-status", "cancel-staged",
+               "resume-staged")
 
 
 def _cli_status_code(local: str, ref: str) -> str:
@@ -2761,6 +3417,11 @@ def _cli_main(argv: list) -> int:
 
     可选 `--offline`：一个网络请求都不发（本地扫描照常），用于界面秒开。
     可选 `--fresh`：忽略官方版本缓存，强制重新联网抓取。
+    更新相关动作（供 DSH 插件里「更新」按钮用）：
+      stage-source <目录> [重启信息b64] [--port N]  暂存更新并挂后台看护进程
+      update-source <目录>                          目标未被占用时直接更新
+      update-status                                待应用更新的状态 + 日志尾部
+      cancel-staged                                取消待应用的更新
     """
     argv = list(argv)
     offline = "--offline" in argv
@@ -2784,6 +3445,22 @@ def _cli_main(argv: list) -> int:
             if len(argv) < 2:
                 raise RuntimeError(t("用法：--json rollback-npm <版本号>"))
             envelope["data"] = rollback_npm(argv[1], log=lines.append)
+        elif action == "stage-source":
+            if len(argv) < 2:
+                raise RuntimeError("用法：--json stage-source <目标目录> [重启信息] [--port N]")
+            restart = _decode_restart_spec(argv[2] if len(argv) > 2 else "")
+            envelope["data"] = stage_source_update(
+                Path(argv[1]), restart=restart, port=_parse_port_arg(argv), log=lines.append)
+        elif action == "update-source":
+            if len(argv) < 2:
+                raise RuntimeError("用法：--json update-source <目标目录>")
+            envelope["data"] = update_source_immediate(Path(argv[1]), log=lines.append)
+        elif action == "update-status":
+            envelope["data"] = pending_update_status()
+        elif action == "cancel-staged":
+            envelope["data"] = cancel_pending_update(log=lines.append)
+        elif action == "resume-staged":
+            envelope["data"] = resume_pending_update(log=lines.append)
         else:
             raise RuntimeError(t("未知动作：{p1}", p1=action))
         envelope["ok"] = True
