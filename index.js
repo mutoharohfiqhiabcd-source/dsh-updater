@@ -7,7 +7,8 @@
 //      回滚目标     GET  /rollback-targets
 //      执行回滚     POST /rollback-source | /rollback-npm
 //      快速版本     GET  /quick
-//      更新 DSH     POST /update-source   （目标正被运行时先暂存，关闭 DSH 后自动应用）
+//      打开更新器   POST /launch-updater  （「更新」按钮：直接弹出桌面更新器窗口，由 EXE 完成更新）
+//      更新 DSH     POST /update-source   （没找到 EXE 时的回退：目标正被运行时先暂存，关闭 DSH 后自动应用）
 //      更新状态     GET  /update-status
 //      取消更新     POST /cancel-update
 //      重试应用     POST /resume-update   （目录被占用等原因失败后，重新挂上看护进程）
@@ -98,6 +99,48 @@ function findLocalUpdater(configured) {
     if (existsSync(candidate)) return candidate
   }
   return null
+}
+
+/**
+ * 找到本机「最新」的更新器 EXE。
+ *
+ * 桌面更新器会随版本更新，而 profile 里配置的 updaterPath 可能指向很旧的构建
+ * （本机就指着一个 0.8.0 的 dist EXE）。所以这里把「配置路径 + searchDirs 里的
+ * EXE」全部收集起来，优先名字带 updater 的、再按修改时间取最新，避免弹出旧版本。
+ * 「更新」按钮就是用它弹出桌面更新器窗口——桌面版有完整的关 DSH / 备份 / 回滚流程。
+ */
+function resolveUpdaterExe(options) {
+  const candidates = []
+  const configured = findLocalUpdater(options.updaterPath)
+  if (configured) {
+    try {
+      candidates.push({ path: configured, mtime: statSync(configured).mtime.toISOString() })
+    } catch { /* 读不到就跳过 */ }
+  }
+  const dirs = options.searchDirs.length > 0 ? options.searchDirs : [options.downloadDir]
+  for (const dir of dirs) {
+    for (const item of listExecutables(dir, 20)) candidates.push(item)
+  }
+  candidates.sort((a, b) => b.mtime.localeCompare(a.mtime))
+  // 更新器的文件名可能是 DeepSeekHarnessUpdater.exe，也可能是归档名 dsh（x-EXE）.exe；
+  // 两者都认，取其中最新的一个（避免弹出 profile 配置里那个很旧的 dist 构建）。
+  const likely = candidates.filter(item => /(updater|dsh)/i.test(item.path))
+  const pool = likely.length > 0 ? likely : candidates
+  return pool[0]?.path ?? null
+}
+
+/** 脱离 DSH 进程启动桌面更新器窗口（GUI），返回 { path, pid }。 */
+function launchUpdater(options) {
+  const target = resolveUpdaterExe(options)
+  if (!target) {
+    throw new Error('没找到本机更新器 EXE；请先下载更新器（或用 updaterPath 指定路径）')
+  }
+  const lower = target.toLowerCase()
+  const child = lower.endsWith('.pyw') || lower.endsWith('.py')
+    ? spawn('pythonw', [target], { detached: true, stdio: 'ignore' })
+    : spawn(target, [], { detached: true, stdio: 'ignore' })
+  child.unref()
+  return { path: target, pid: child.pid ?? 0 }
 }
 
 /** GitHub API 取最新 Release；网络抖动时重试一次。 */
@@ -362,16 +405,8 @@ async function runDownload(options, signal, log) {
 }
 
 async function runLaunch(options) {
-  const target = findLocalUpdater(options.updaterPath)
-  if (!target) {
-    throw new Error('找不到本地更新器；先 download，或用 updaterPath 指定绝对路径')
-  }
-  const lower = target.toLowerCase()
-  const child = lower.endsWith('.pyw') || lower.endsWith('.py')
-    ? spawn('pythonw', [target], { detached: true, stdio: 'ignore' })
-    : spawn(target, [], { detached: true, stdio: 'ignore' })
-  child.unref()
-  return `已启动: ${target}（pid ${child.pid ?? '未知'}）`
+  const { path: target, pid } = launchUpdater(options)
+  return `已启动: ${target}（pid ${pid || '未知'}）`
 }
 
 // ---------------------------------------------------------------------------
@@ -425,7 +460,7 @@ function createApiHandler(options) {
     const method = String(req.method ?? 'GET').toUpperCase()
     const wantsPost = action === 'rollback-source' || action === 'rollback-npm'
       || action === 'update-source' || action === 'cancel-update'
-      || action === 'resume-update'
+      || action === 'resume-update' || action === 'launch-updater'
     if (wantsPost ? method !== 'POST' : method !== 'GET') {
       sendJson(res, 405, { ok: false, error: `不支持的方法 ${method}` })
       return
@@ -519,6 +554,17 @@ function createApiHandler(options) {
           sendJson(res, envelope.ok ? 200 : 502, envelope.ok
             ? { ok: true, data: envelope.data, log: envelope.log }
             : { ok: false, error: envelope.error, log: envelope.log })
+          return
+        }
+        case 'launch-updater': {
+          // 「更新」按钮的第一选择：直接弹出桌面更新器窗口（EXE 里有关 DSH / 备份 / 回滚全套流程）
+          try {
+            const launched = launchUpdater(options)
+            log(`已启动桌面更新器：${launched.path}（pid ${launched.pid || '未知'}）`)
+            sendJson(res, 200, { ok: true, data: launched })
+          } catch (launchError) {
+            sendJson(res, 502, { ok: false, error: describeError(launchError) })
+          }
           return
         }
         case 'resume-update': {

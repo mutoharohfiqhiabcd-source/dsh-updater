@@ -149,25 +149,21 @@ Updater and roll back are executed by this repository's `updater_core.py` (its n
 `--json` mode), so they share the desktop app's logic. They need Python 3.10+ on
 the machine; without it the panel says so and version info still works.
 
-### Update DSH from the plugin (new in v1.0.0)
+### Update DSH from the plugin
 
-In the Updater panel, a **source checkout** with "Update available" gets an
-**Update** button:
+In the Updater panel, any row that is "Update available" gets an **Update** button:
 
-1. press Update, then press again on *Confirm?* (two presses, no accidents);
-2. the plugin downloads the official source into a staging folder next to the
-   target (this does **not** touch the running DSH directory; it may take minutes);
-3. when the banner says the update is staged, **close DSH** (close every DSH
-   instance started from that folder);
-4. a detached watcher then: backs up the old folder → swaps in the new source →
-   runs `pnpm install` / `pnpm run build` **only when needed** → **restarts DSH
-   automatically** (~2–5 min);
-5. refresh the page and press Updater — the new version is in place.
+1. press Update — the plugin pops up the **desktop updater window** (the EXE);
+2. inside that window press Update: the desktop app detects the running DSH, asks
+   to close it, backs up the old folder, downloads the official source and swaps
+   the whole folder (optional `pnpm install` / `pnpm run build`);
+3. start DSH again and you are on the new version.
 
-Safety: the old folder is backed up in full and restored automatically if the
-build fails; if another process still occupies the folder the staged update is
-kept so you can hit *Retry* (no re-download); a staged update can be cancelled at
-any time.
+> The update itself runs through the desktop app's full flow (close DSH / backup /
+> rollback all live in the EXE); the plugin just opens the window for you. If no
+> updater EXE is found locally, the plugin falls back to its **in-plugin update**:
+> download to staging → ask you to close DSH → a detached watcher swaps, rebuilds
+> and restarts DSH.
 
 > Which rows get the **Update** button: **source checkouts**, and **runtime
 > profiles whose runtime actually is a source checkout** (when
