@@ -1,5 +1,8 @@
-v0.10.0 发布说明 —— **在 DSH 插件里直接更新 DSH**
+v1.0.0 发布说明 —— **首个完善版：在 DSH 插件里直接更新 DSH**
 
+> ⭐ **v1.0.0 是本项目第一个「完善版」**：桌面 EXE、Python 源码版、DSH 插件三条线功能齐全、
+> 行为一致；检测、回滚、插件内更新 DSH 全部可用，npm / GitHub 两种安装方式均已端到端验证。
+>
 > 本文件是「最新一版」的更新说明，发布新版本前请改成当版内容。
 > GitHub Actions 在推送 `v*` tag 时会把这个文件的内容作为 Release 说明（`body_path`）。
 
@@ -107,7 +110,7 @@ Windows **不允许**对一个正被其他进程当作工作目录的目录改�
 | 文件 | 说明 |
 |---|---|
 | `DeepSeekHarnessUpdater.exe` | Windows 独立版桌面工具（无需 Python）。含 v0.8.1 的检测提速 |
-| `dsh-updater-src-v0.10.0.zip` | Python 源码版：解压后双击 `启动更新器.bat`，或运行 `python updater_gui.pyw`（需 Python 3.10+，含 tkinter）；同时附带 DSH 插件文件 |
+| `dsh-updater-src-v1.0.0.zip` | Python 源码版：解压后双击 `启动更新器.bat`，或运行 `python updater_gui.pyw`（需 Python 3.10+，含 tkinter）；同时附带 DSH 插件文件 |
 | `SHA256.txt` | EXE 的 SHA256 校验值 |
 
 > 网页版插件不在这些资产里：从 npm（`dsh-updater-plugin`）或本仓库直接安装即可。

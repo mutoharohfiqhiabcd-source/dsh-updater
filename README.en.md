@@ -149,7 +149,7 @@ Check and roll back are executed by this repository's `updater_core.py` (its new
 `--json` mode), so they share the desktop app's logic. They need Python 3.10+ on
 the machine; without it the panel says so and version info still works.
 
-### Update DSH from the plugin (new in v0.10.0)
+### Update DSH from the plugin (new in v1.0.0)
 
 In the Check panel, a **source checkout** with "Update available" gets an
 **Update** button:
