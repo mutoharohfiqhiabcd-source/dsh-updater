@@ -522,7 +522,6 @@ function createApiHandler(options) {
           if (inUse) {
             const spec = restartSpec()
             const encoded = spec ? Buffer.from(JSON.stringify(spec), 'utf8').toString('base64') : ''
-            log(`暂存 DSH 更新（目标正在运行）：${target}`)
             const envelope = await runCore(options,
               ['stage-source', target, encoded, '--port', String(port)],
               undefined, 20 * 60_000)
@@ -532,7 +531,6 @@ function createApiHandler(options) {
               : { ok: false, error: envelope.error, log: envelope.log })
             return
           }
-          log(`直接更新 DSH（目标未被运行中的 DSH 占用）：${target}`)
           const envelope = await runCore(options,
             ['update-source', target, '--port', String(port)],
             undefined, 30 * 60_000)
@@ -558,9 +556,17 @@ function createApiHandler(options) {
         }
         case 'launch-updater': {
           // 「更新」按钮的第一选择：直接弹出桌面更新器窗口（EXE 里有关 DSH / 备份 / 回滚全套流程）
+          // ?dry=1 只解析出要启动的 EXE 路径（排障用，不真的开窗口）
+          const dry = url.searchParams.get('dry') === '1'
           try {
+            if (dry) {
+              const exe = resolveUpdaterExe(options)
+              sendJson(res, exe ? 200 : 502, exe
+                ? { ok: true, data: { path: exe, pid: 0, dry: true } }
+                : { ok: false, error: '没找到本机更新器 EXE' })
+              return
+            }
             const launched = launchUpdater(options)
-            log(`已启动桌面更新器：${launched.path}（pid ${launched.pid || '未知'}）`)
             sendJson(res, 200, { ok: true, data: launched })
           } catch (launchError) {
             sendJson(res, 502, { ok: false, error: describeError(launchError) })
