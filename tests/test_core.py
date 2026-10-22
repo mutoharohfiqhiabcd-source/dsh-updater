@@ -1431,9 +1431,20 @@ def _patch_update_download(monkeypatch, zip_bytes: bytes, tmp_path: Path) -> Non
     zip_path.write_bytes(zip_bytes)
     data = zip_path.read_bytes()
 
-    def fake_download(url, dest, log=print, timeout=120.0, progress_cb=None):
+    def fake_download(url, dest, log=print, timeout=120.0, progress_cb=None,
+                      detail_cb=None, max_total=None):
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(data)
+        if progress_cb:
+            progress_cb(0.5)
+            progress_cb(1.0)
+        if detail_cb:
+            detail_cb({"phase": "downloading", "done": len(data) // 2, "total": len(data),
+                       "percent": 50.0, "speed": 1024.0, "eta": 1.0,
+                       "message": "fake download"})
+            detail_cb({"phase": "downloading", "done": len(data), "total": len(data),
+                       "percent": 100.0, "speed": 1024.0, "eta": 0.0,
+                       "message": "fake download done"})
         return dest
 
     monkeypatch.setattr(core, "download_file", fake_download)
@@ -1829,5 +1840,58 @@ def test_watcher_without_auto_close_does_not_kill(monkeypatch, tmp_path):
     result = core.watch_and_apply_pending_update()
     assert killed == [], "非自动关闭模式不应主动杀 DSH"
     assert result["applied"] is True
+
+
+# ---------------------------------------------------------------------------
+# 下载/暂存进度（插件界面显示进度条）
+# ---------------------------------------------------------------------------
+def test_stage_source_update_writes_staged_progress(monkeypatch, tmp_path):
+    target, staged = _stage_fake_update(monkeypatch, tmp_path)
+    progress = core.read_update_progress()
+    assert progress["phase"] == "staged", "暂存完成后要写 staged 进度，界面才知道可以进入下一步"
+    assert progress["percent"] == 100
+    assert progress["new_version"] == "0.2.0"
+    assert progress["target"] == str(target)
+    assert progress["staging"] == staged["staging"]
+    assert progress["auto_close"] is False
+
+
+def test_stage_failure_writes_failed_progress(monkeypatch, tmp_path):
+    target = _make_checkout_dir(tmp_path / "dsh", "0.1.0")
+
+    def boom(url, dest, log=print, timeout=120.0, progress_cb=None,
+             detail_cb=None, max_total=None):
+        raise RuntimeError("网络断了")
+
+    monkeypatch.setattr(core, "download_file", boom)
+    with pytest.raises(RuntimeError):
+        core.stage_source_update(target, port=3999)
+    progress = core.read_update_progress()
+    assert progress["phase"] == "failed"
+    assert "网络断了" in progress["message"]
+
+
+def test_cancel_during_staging_kills_worker(monkeypatch, tmp_path):
+    """还没生成 manifest 时（下载中）取消：要结束后台 worker 并清掉暂存目录。"""
+    staging = tmp_path / ".dsh.dsh-stage-x"
+    staging.mkdir()
+    core._write_update_progress(phase="downloading", worker_pid=4242,
+                                staging=str(staging), percent=30)
+    killed = []
+    monkeypatch.setattr(core.os, "kill", lambda pid, sig: killed.append(pid))
+    result = core.cancel_pending_update()
+    assert result["canceled"] is True and result["staging"] is True
+    assert killed == [4242]
+    assert not staging.exists(), "取消后要清掉暂存目录"
+    assert core.read_update_progress()["phase"] == "canceled"
+
+
+def test_update_progress_cli_roundtrip(monkeypatch, capsys):
+    core._write_update_progress(phase="downloading", percent=42, done=1024, total=2048)
+    code = core._cli_main(["update-progress"])
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert code == 0 and payload["ok"] is True
+    assert payload["data"]["phase"] == "downloading"
+    assert payload["data"]["percent"] == 42
 
 

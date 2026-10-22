@@ -7,10 +7,11 @@
 //      回滚目标     GET  /rollback-targets
 //      执行回滚     POST /rollback-source | /rollback-npm
 //      快速版本     GET  /quick
-//      打开更新器   POST /launch-updater  （「更新」按钮：直接弹出桌面更新器窗口，由 EXE 完成更新）
-//      更新 DSH     POST /update-source   （没找到 EXE 时的回退：目标正被运行时先暂存，关闭 DSH 后自动应用）
+//      打开更新器   POST /launch-updater  （对话框里的「改用桌面更新器」：启动 EXE 窗口）
+//      更新 DSH     POST /update-source   （正在运行时：后台 worker 下载暂存 + 进度文件，立即返回）
+//      更新进度     GET  /update-progress（读 update-progress.json：百分比/速度/剩余时间）
 //      更新状态     GET  /update-status
-//      取消更新     POST /cancel-update
+//      取消更新     POST /cancel-update   （下载中可取消后台 worker）
 //      重试应用     POST /resume-update   （目录被占用等原因失败后，重新挂上看护进程）
 //    前三个交给本仓库的 updater_core.py（`--json` 模式）执行，逻辑与桌面版完全一致；
 //    没装 Python 时 /detect、/rollback-* 会返回友好错误，其余功能不受影响。
@@ -305,6 +306,44 @@ function pythonCandidates(configured) {
     : ['python3', 'python']
 }
 
+/** 更新进度文件路径：与 updater_core.py 的 _settings_dir() 保持一致。 */
+function updateProgressFile() {
+  const custom = process.env.DSH_UPDATER_SETTINGS_DIR
+  const dir = custom
+    ? custom
+    : process.env.APPDATA
+      ? join(process.env.APPDATA, 'dsh-updater')
+      : join(homedir(), '.config', 'dsh-updater')
+  return join(dir, 'update-progress.json')
+}
+
+/** 挑一个 Python 解释器（后台 worker 用；绝对路径要求存在，否则交给 PATH）。 */
+function pickPython(options) {
+  for (const exe of pythonCandidates(options.python)) {
+    if (exe.includes('/') || exe.includes('\\')) {
+      if (existsSync(exe)) return exe
+      continue
+    }
+    return exe
+  }
+  return 'python'
+}
+
+/**
+ * 后台（detached）跑一次 updater_core.py：暂存下载动辄几分钟，不能卡住 HTTP 请求。
+ * 进度写进 update-progress.json，界面轮询 /update-progress 显示进度条。
+ */
+function spawnCoreDetached(options, args) {
+  const exe = pickPython(options)
+  const child = spawn(exe, ['-X', 'utf8', CORE_SCRIPT, '--json', ...args], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+  })
+  child.unref()
+  return child.pid ?? 0
+}
+
 /**
  * 调 updater_core.py 的 `--json` 模式并把结果解出来。
  * @returns core 返回的 envelope：{ ok, action, data, error, log }
@@ -528,15 +567,20 @@ function createApiHandler(options) {
           const inUse = root !== '' && samePath(root, target)
           const port = requestPort(req)
           if (inUse) {
+            // 目标就是正在运行的 DSH：下载/暂存可能好几分钟，绝不能卡住 HTTP 请求。
+            // 后台（detached）跑 stage-source，进度写 update-progress.json，
+            // 界面轮询 /update-progress 显示进度条；暂存完成后看护进程按 autoClose 行事。
             const spec = restartSpec()
             const encoded = spec ? Buffer.from(JSON.stringify(spec), 'utf8').toString('base64') : ''
-            const envelope = await runCore(options,
-              ['stage-source', target, encoded, '--port', String(port), ...flags],
-              undefined, 20 * 60_000)
-            sendJson(res, envelope.ok ? 200 : 502, envelope.ok
-              ? { ok: true, data: { ...envelope.data, inUse: true, restart: Boolean(spec) },
-                log: envelope.log }
-              : { ok: false, error: envelope.error, log: envelope.log })
+            const workerPid = spawnCoreDetached(options,
+              ['stage-source', target, encoded, '--port', String(port), ...flags])
+            sendJson(res, 200, {
+              ok: true,
+              data: {
+                started: true, inUse: true, autoClose, restart: Boolean(spec),
+                workerPid, progressFile: updateProgressFile(),
+              },
+            })
             return
           }
           const envelope = await runCore(options,
@@ -546,6 +590,16 @@ function createApiHandler(options) {
             ? { ok: true, data: { ...envelope.data, inUse: false, restart: false },
               log: envelope.log }
             : { ok: false, error: envelope.error, log: envelope.log })
+          return
+        }
+        case 'update-progress': {
+          // 直接读文件（不启动 Python），给界面做高频轮询用
+          let data = { present: false }
+          try {
+            const raw = readFileSync(updateProgressFile(), 'utf8')
+            data = { present: true, ...JSON.parse(raw) }
+          } catch { /* 没有进度文件 */ }
+          sendJson(res, 200, { ok: true, data })
           return
         }
         case 'update-status': {

@@ -1780,8 +1780,13 @@ def _fmt_dl_progress(got: int, total: int, elapsed: float) -> str:
 
 
 def download_file(url: str, dest: Path, log=print, timeout: float = 120.0,
-                  progress_cb=None) -> Path:
-    """流式下载到 dest，返回 dest。进度行经 log 输出（限流），数值经 progress_cb 回调。"""
+                  progress_cb=None, detail_cb=None,
+                  max_total: float | None = None) -> Path:
+    """流式下载到 dest，返回 dest。进度行经 log 输出（限流），数值经 progress_cb 回调。
+
+    detail_cb 会收到更详细的字典（phase/done/total/percent/speed/eta），供插件界面
+    显示进度条；max_total 用来兜住「网速极慢一直下不完」——超过总时长直接报错。
+    """
     req = urllib.request.Request(url, headers=UA)
     log(t("开始下载：{url}", url=url))
     throttle = _Throttle(min_gap=0.4, min_step=5.0)
@@ -1797,6 +1802,11 @@ def download_file(url: str, dest: Path, log=print, timeout: float = 120.0,
                     break
                 fh.write(chunk)
                 got += len(chunk)
+                elapsed = time.monotonic() - t0
+                if max_total is not None and elapsed > max_total:
+                    raise RuntimeError(
+                        f"下载超时（已用 {elapsed / 60:.0f} 分钟，只下到 "
+                        f"{human_size(got)}）：网络太慢，请稍后重试或换网络")
                 if total:
                     pct = got / total * 100
                     if throttle.allow(pct):
@@ -1804,14 +1814,27 @@ def download_file(url: str, dest: Path, log=print, timeout: float = 120.0,
                         log(t("[下载] {p1}", p1=_fmt_dl_progress(got, total, elapsed)))
                     if progress_cb:
                         progress_cb(min(pct / 100.0, 1.0))
+                    if detail_cb:
+                        speed = (got / elapsed) if elapsed > 0.05 else 0.0
+                        eta = ((total - got) / speed) if speed > 0 else 0.0
+                        detail_cb({
+                            "phase": "downloading", "done": got, "total": total,
+                            "percent": min(pct, 100.0), "speed": speed, "eta": eta,
+                            "message": "正在下载官方源码…",
+                        })
+    elapsed = time.monotonic() - t0
     if progress_cb:
         progress_cb(1.0)
-    log(t("下载完成：{dest}（{p1}，用时 {p2:.1f} 秒）", dest=dest, p1=human_size(got), p2=time.monotonic() - t0))
+    if detail_cb:
+        detail_cb({"phase": "downloading", "done": got, "total": total or got,
+                   "percent": 100.0, "speed": (got / elapsed) if elapsed > 0 else 0.0,
+                   "eta": 0.0, "message": "下载完成"})
+    log(t("下载完成：{dest}（{p1}，用时 {p2:.1f} 秒）", dest=dest, p1=human_size(got), p2=elapsed))
     return dest
 
 
 def _extract_zip_with_progress(zip_path: Path, extract_dir: Path,
-                               log=print, progress_cb=None) -> None:
+                               log=print, progress_cb=None, detail_cb=None) -> None:
     """逐文件解压，输出限流进度行。"""
     with zipfile.ZipFile(zip_path) as zf:
         infos = [i for i in zf.infolist() if not i.is_dir()]
@@ -1838,15 +1861,31 @@ def _extract_zip_with_progress(zip_path: Path, extract_dir: Path,
                     )
                 if progress_cb:
                     progress_cb(min(pct / 100.0, 1.0))
+                if detail_cb:
+                    elapsed = time.monotonic() - t0
+                    speed = (done_bytes / elapsed) if elapsed > 0.05 else 0.0
+                    eta = ((total_bytes - done_bytes) / speed) if speed > 0 else 0.0
+                    detail_cb({
+                        "phase": "extracting", "done": done_bytes, "total": total_bytes,
+                        "percent": min(pct, 100.0), "speed": speed, "eta": eta,
+                        "file": done_files, "files": len(infos),
+                        "message": f"正在解压官方源码（{done_files}/{len(infos)} 个文件）…",
+                    })
         if progress_cb:
             progress_cb(1.0)
+        if detail_cb:
+            detail_cb({"phase": "extracting", "done": total_bytes, "total": total_bytes,
+                       "percent": 100.0, "speed": 0.0, "eta": 0.0,
+                       "message": "解压完成"})
         log(t("解压完成：{done_files} 个文件，用时 {p1:.1f} 秒", done_files=done_files, p1=time.monotonic() - t0))
 
 
-def _find_zip_root(zip_path: Path, extract_dir: Path, log=print, progress_cb=None) -> Path:
+def _find_zip_root(zip_path: Path, extract_dir: Path, log=print, progress_cb=None,
+                   detail_cb=None) -> Path:
     """解压 zip 并返回其中包含 dsh-root package.json 的顶层目录。"""
     log(t("解压中：{p1}", p1=zip_path.name))
-    _extract_zip_with_progress(zip_path, extract_dir, log=log, progress_cb=progress_cb)
+    _extract_zip_with_progress(zip_path, extract_dir, log=log, progress_cb=progress_cb,
+                               detail_cb=detail_cb)
     # 找 name == @deepseek-ai/dsh-root 的目录
     try:
         for child in extract_dir.iterdir():
@@ -2314,6 +2353,7 @@ PENDING_SCHEMA = 1
 DEFAULT_WEB_PORT = 3080
 _UPDATE_WAIT_TIMEOUT = 1800.0     # 等待 DSH 关闭的最长时间（30 分钟）
 _UPDATE_SWAP_RETRY = 120.0        # 目录仍被占用时的重试窗口（秒）
+_UPDATE_STAGE_DOWNLOAD_TIMEOUT = 900.0   # 单次下载总时长上限（15 分钟），防网络卡死
 
 _UPDATE_WATCHER_TEMPLATE = '''# -*- coding: utf-8 -*-
 """dsh-updater 后台看护进程（由插件在暂存更新时自动生成）。
@@ -2370,6 +2410,39 @@ def update_watcher_log_file() -> Path:
 
 def _now_stamp() -> str:
     return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def update_progress_file() -> Path:
+    """更新进度文件：下载 / 解压期间持续写入，插件界面轮询它显示进度。"""
+    return _settings_dir() / "update-progress.json"
+
+
+def _write_update_progress(**fields) -> None:
+    """原子写更新进度；任何失败都静默（进度不能拖垮更新）。"""
+    try:
+        data = {"ts": time.time(), "updated": _now_stamp()}
+        data.update({key: value for key, value in fields.items() if value is not None})
+        target = update_progress_file()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_name(target.name + ".tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False, default=str), encoding="utf-8")
+        os.replace(tmp, target)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def read_update_progress() -> dict:
+    """读取更新进度；不存在 / 损坏时返回 {}。"""
+    data = _read_json(update_progress_file())
+    return data if isinstance(data, dict) else {}
+
+
+def clear_update_progress() -> None:
+    """清掉进度文件（更新结束/取消后调用）。"""
+    try:
+        update_progress_file().unlink()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _watcher_log(log_file: Path, message: str) -> None:
@@ -2439,27 +2512,48 @@ def _auto_update_steps(target_dir: Path, new_root: Path) -> tuple:
 
 
 def _download_source_staging(target_dir: Path, log=print) -> dict:
-    """下载官方源码并解压到 target 同级的暂存目录（同分区，便于之后原子改名）。"""
+    """下载官方源码并解压到 target 同级的暂存目录（同分区，便于之后原子改名）。
+
+    下载/解压过程中持续写 `update-progress.json`，插件界面轮询它显示进度条。
+    """
     ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     staging = target_dir.parent / f".{target_dir.name}.dsh-stage-{ts}"
     tmp = Path(tempfile.mkdtemp(prefix="dsh-stage-"))
+    _write_update_progress(phase="preparing", percent=0, done=0, total=0,
+                           worker_pid=os.getpid(), staging=str(staging),
+                           target=str(target_dir), message="正在准备下载官方源码…")
     try:
         zip_path = tmp / "deepseek-harness.zip"
         extract_dir = tmp / "extract"
         extract_dir.mkdir()
         log(f"开始下载官方源码：{ZIP_URL}")
-        download_file(ZIP_URL, zip_path, log=log)
-        new_root = _find_zip_root(zip_path, extract_dir, log=log)
+
+        def _down_progress(detail: dict) -> None:
+            _write_update_progress(worker_pid=os.getpid(), staging=str(staging),
+                                   target=str(target_dir), **detail)
+
+        download_file(ZIP_URL, zip_path, log=log, detail_cb=_down_progress,
+                      max_total=_UPDATE_STAGE_DOWNLOAD_TIMEOUT)
+        _write_update_progress(phase="extracting", percent=0, worker_pid=os.getpid(),
+                               staging=str(staging), target=str(target_dir),
+                               message="下载完成，正在解压官方源码…")
+        new_root = _find_zip_root(zip_path, extract_dir, log=log,
+                                  detail_cb=_down_progress)
         new_version = _read_dir_version(new_root)
         if not new_version:
             raise RuntimeError("下载的源码包缺少版本号")
         if staging.exists():
             shutil.rmtree(staging, ignore_errors=True)
+        _write_update_progress(phase="staging", percent=100, worker_pid=os.getpid(),
+                               staging=str(staging), target=str(target_dir),
+                               message="正在把新源码放到暂存目录…")
         shutil.move(str(new_root), str(staging))
         log(f"官方源码已暂存：{staging}（版本 {new_version}）")
         return {"staging": staging, "new_version": new_version}
-    except Exception:
+    except Exception as e:  # noqa: BLE001
         shutil.rmtree(staging, ignore_errors=True)
+        _write_update_progress(phase="failed", message=f"{type(e).__name__}: {e}",
+                               worker_pid=os.getpid(), staging="", target=str(target_dir))
         raise
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -2537,78 +2631,92 @@ def stage_source_update(target_dir: Path, restart: dict | None = None,
         run_install, run_build, wait_port, auto_close, restart, log_file, watcher_pid }
     """
     target_dir = Path(target_dir)
-    if not target_dir.is_dir():
-        raise RuntimeError(f"目标目录不存在：{target_dir}")
-    if not _is_source_checkout(target_dir):
-        raise RuntimeError("该目录不是 DeepSeek Harness 源码检出")
-    # 旧任务先取消（避免两个看护进程抢同一个目标）
-    previous = load_pending_update()
-    if previous:
-        try:
-            cancel_pending_update(log=lambda *_: None)
-        except Exception:  # noqa: BLE001
-            pass
-    old_version = _read_dir_version(target_dir)
-    log(f"当前版本：{old_version or '未知'}；先下载官方源码到暂存目录…")
-    got = _download_source_staging(target_dir, log=log)
-    staging = got["staging"]
-    new_version = got["new_version"]
-    auto_install, auto_build = _auto_update_steps(target_dir, staging)
-    if run_install is not None:
-        auto_install = bool(run_install)
-    if run_build is not None:
-        auto_build = bool(run_build)
-    restart_spec = dict(restart) if isinstance(restart, dict) else {}
-    log_path = update_watcher_log_file()
-    manifest = {
-        "schema": PENDING_SCHEMA,
-        "created": _now_stamp(),
-        "updated": _now_stamp(),
-        "status": "waiting",
-        "target": str(target_dir),
-        "staging": str(staging),
-        "old_version": old_version,
-        "new_version": new_version,
-        "run_install": bool(auto_install),
-        "run_build": bool(auto_build),
-        "wait_port": int(port),
-        "wait_timeout": float(wait_timeout),
-        "auto_close": bool(auto_close),
-        "restart": restart_spec,
-        "log_file": str(log_path),
-        "watcher_pid": 0,
-        "error": "",
-    }
-    _write_pending_update(manifest)
-    pid = _spawn_update_watcher(pending_update_file())
-    manifest["watcher_pid"] = pid
-    _write_pending_update(manifest)
-    if not pid:
-        _watcher_log(log_path, "看护进程没起来：更新已暂存，但关闭 DSH 后不会自动应用。")
-    elif auto_close:
-        _watcher_log(log_path, f"看护进程已启动（pid {pid}）：将自动关闭 DSH 并应用更新。")
-    else:
-        _watcher_log(log_path,
-                     f"看护进程已启动（pid {pid}）：等待端口 {port} 关闭后应用更新。")
-    if auto_close:
-        log(f"更新已暂存：{old_version or '未知'} → {new_version}；看护进程会关闭 DSH 并自动更新。")
-    else:
-        log(f"更新已暂存：{old_version or '未知'} → {new_version}；关闭 DSH 后将自动替换并重启。")
-    return {
-        "ok": True,
-        "staged": True,
-        "target": str(target_dir),
-        "staging": str(staging),
-        "old_version": old_version,
-        "new_version": new_version,
-        "run_install": bool(auto_install),
-        "run_build": bool(auto_build),
-        "wait_port": int(port),
-        "auto_close": bool(auto_close),
-        "restart": bool(restart_spec),
-        "log_file": str(log_path),
-        "watcher_pid": pid,
-    }
+    _write_update_progress(phase="preparing", percent=0, done=0, total=0,
+                           worker_pid=os.getpid(), target=str(target_dir),
+                           message="正在准备下载官方源码…")
+    try:
+        if not target_dir.is_dir():
+            raise RuntimeError(f"目标目录不存在：{target_dir}")
+        if not _is_source_checkout(target_dir):
+            raise RuntimeError("该目录不是 DeepSeek Harness 源码检出")
+        # 旧任务先取消（避免两个看护进程抢同一个目标）
+        previous = load_pending_update()
+        if previous:
+            try:
+                cancel_pending_update(log=lambda *_: None)
+            except Exception:  # noqa: BLE001
+                pass
+        old_version = _read_dir_version(target_dir)
+        log(f"当前版本：{old_version or '未知'}；先下载官方源码到暂存目录…")
+        got = _download_source_staging(target_dir, log=log)
+        staging = got["staging"]
+        new_version = got["new_version"]
+        auto_install, auto_build = _auto_update_steps(target_dir, staging)
+        if run_install is not None:
+            auto_install = bool(run_install)
+        if run_build is not None:
+            auto_build = bool(run_build)
+        restart_spec = dict(restart) if isinstance(restart, dict) else {}
+        log_path = update_watcher_log_file()
+        manifest = {
+            "schema": PENDING_SCHEMA,
+            "created": _now_stamp(),
+            "updated": _now_stamp(),
+            "status": "waiting",
+            "target": str(target_dir),
+            "staging": str(staging),
+            "old_version": old_version,
+            "new_version": new_version,
+            "run_install": bool(auto_install),
+            "run_build": bool(auto_build),
+            "wait_port": int(port),
+            "wait_timeout": float(wait_timeout),
+            "auto_close": bool(auto_close),
+            "restart": restart_spec,
+            "log_file": str(log_path),
+            "watcher_pid": 0,
+            "error": "",
+        }
+        _write_pending_update(manifest)
+        pid = _spawn_update_watcher(pending_update_file())
+        manifest["watcher_pid"] = pid
+        _write_pending_update(manifest)
+        if not pid:
+            _watcher_log(log_path, "看护进程没起来：更新已暂存，但关闭 DSH 后不会自动应用。")
+        elif auto_close:
+            _watcher_log(log_path, f"看护进程已启动（pid {pid}）：将自动关闭 DSH 并应用更新。")
+        else:
+            _watcher_log(log_path,
+                         f"看护进程已启动（pid {pid}）：等待端口 {port} 关闭后应用更新。")
+        if auto_close:
+            log(f"更新已暂存：{old_version or '未知'} → {new_version}；看护进程会关闭 DSH 并自动更新。")
+        else:
+            log(f"更新已暂存：{old_version or '未知'} → {new_version}；关闭 DSH 后将自动替换并重启。")
+        _write_update_progress(
+            phase="staged", percent=100, done=0, total=0,
+            worker_pid=os.getpid(), target=str(target_dir), staging=str(staging),
+            old_version=old_version, new_version=new_version,
+            auto_close=bool(auto_close), watcher_pid=pid,
+            message=f"更新包已就绪：{old_version or '旧版本'} → {new_version}")
+        return {
+            "ok": True,
+            "staged": True,
+            "target": str(target_dir),
+            "staging": str(staging),
+            "old_version": old_version,
+            "new_version": new_version,
+            "run_install": bool(auto_install),
+            "run_build": bool(auto_build),
+            "wait_port": int(port),
+            "auto_close": bool(auto_close),
+            "restart": bool(restart_spec),
+            "log_file": str(log_path),
+            "watcher_pid": pid,
+        }
+    except Exception as e:  # noqa: BLE001
+        _write_update_progress(phase="failed", message=f"{type(e).__name__}: {e}",
+                               worker_pid=os.getpid(), target=str(target_dir))
+        raise
 
 
 def _wait_dir_free(target_dir: Path, log) -> None:
@@ -2952,12 +3060,29 @@ def pending_update_status() -> dict:
 
 
 def cancel_pending_update(log=print) -> dict:
-    """取消待应用的更新：杀掉看护进程、删掉暂存目录、状态置 canceled。
+    """取消更新：暂存阶段杀掉下载 worker，或取消已暂存的更新（结束看护进程 + 清暂存）。
 
     正在应用（applying）时拒绝取消，避免把目录换到一半。
     """
     manifest = load_pending_update()
     if not manifest:
+        # 还没有清单：可能正在下载/解压（后台 worker 写进度文件）
+        progress = read_update_progress()
+        phase = str(progress.get("phase") or "")
+        if phase in ("preparing", "downloading", "extracting", "staging"):
+            worker = int(progress.get("worker_pid") or 0)
+            if worker:
+                try:
+                    os.kill(worker, signal.SIGTERM)
+                    log(f"已结束下载进程（pid {worker}）")
+                except Exception:  # noqa: BLE001
+                    pass
+            staging_path = Path(str(progress.get("staging") or ""))
+            if str(staging_path) and staging_path.is_dir():
+                shutil.rmtree(staging_path, ignore_errors=True)
+            _write_update_progress(phase="canceled", message="更新已取消", percent=0)
+            log("已取消正在进行的更新下载。")
+            return {"ok": True, "canceled": True, "staging": True, "message": "已取消下载"}
         return {"ok": True, "canceled": False, "message": "没有待应用的更新"}
     status = manifest.get("status")
     if status == "applying":
@@ -2975,6 +3100,7 @@ def cancel_pending_update(log=print) -> dict:
             pass
     _cleanup_staging(manifest)
     _set_pending_status("canceled", finished=_now_stamp())
+    _write_update_progress(phase="canceled", message="更新已取消", percent=0)
     log("已取消待应用的更新并清理暂存目录。")
     return {"ok": True, "canceled": True, "message": "已取消"}
 
@@ -3460,8 +3586,8 @@ def _selftest() -> int:
 # JSON CLI —— 供 DSH 插件等外部调用（`python updater_core.py --json <动作>`）
 # ---------------------------------------------------------------------------
 CLI_ACTIONS = ("detect", "version", "rollback-targets", "rollback-source", "rollback-npm",
-               "stage-source", "update-source", "update-status", "cancel-staged",
-               "resume-staged")
+               "stage-source", "update-source", "update-status", "update-progress",
+               "cancel-staged", "resume-staged")
 
 
 def _cli_status_code(local: str, ref: str) -> str:
@@ -3585,6 +3711,8 @@ def _cli_main(argv: list) -> int:
                 run_install=install_flag, run_build=build_flag)
         elif action == "update-status":
             envelope["data"] = pending_update_status()
+        elif action == "update-progress":
+            envelope["data"] = read_update_progress()
         elif action == "cancel-staged":
             envelope["data"] = cancel_pending_update(log=lines.append)
         elif action == "resume-staged":

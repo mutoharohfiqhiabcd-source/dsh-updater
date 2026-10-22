@@ -162,15 +162,18 @@ which opens an **in-plugin update dialog** (a replica of the desktop updater):
 | ☐ `pnpm run build` after replacing | required when DSH is started from a source build |
 | buttons | Start update / Close / **Use desktop updater** (still launches the EXE) |
 
-With "close DSH automatically" the flow is: plugin stages the official source →
-watcher closes DSH → backs up the old folder → swaps the new source (keeps
-`node_modules`/`.git`) → optional install/build → **restarts DSH** → the page
-polls until DSH is back and **reloads itself**.
+With "close DSH automatically" the flow is: a **background worker** stages the
+official source (the dialog shows a live progress bar:
+`Downloading official source… 37% · 12.3 MB / 33.1 MB · 1.2 MB/s · 18s`, and you can
+cancel while downloading) → watcher closes DSH → backs up the old folder → swaps the
+new source (keeps `node_modules`/`.git`) → optional install/build → **restarts DSH** →
+the page polls until DSH is back and **reloads itself**.
 
 > Without auto-close you are asked to close DSH manually; the watcher then swaps,
-> rebuilds and restarts. Safety: full backup, rollback on build failure, retry
-> button when another process still occupies the folder (no re-download), and a
-> cancel button while staged.
+> rebuilds and restarts. A download that takes more than 15 minutes fails with a
+> clear timeout error instead of hanging forever. Safety: full backup, rollback on
+> build failure, retry button when another process still occupies the folder (no
+> re-download), and a cancel button while staging.
 
 > Which rows get the **Update** button: **source checkouts**, and **runtime
 > profiles whose runtime actually is a source checkout** (when
