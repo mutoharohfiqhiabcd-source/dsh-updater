@@ -167,7 +167,14 @@ In the Check panel, a **source checkout** with "Update available" gets an
 Safety: the old folder is backed up in full and restored automatically if the
 build fails; if another process still occupies the folder the staged update is
 kept so you can hit *Retry* (no re-download); a staged update can be cancelled at
-any time. Only **source checkouts** are supported (not npm globals / profiles).
+any time.
+
+> Which rows get the **Update** button: **source checkouts**, and **runtime
+> profiles whose runtime actually is a source checkout** (when
+> `~/.dsh/profiles/node_modules/@deepseek-ai/dsh` is a junction into a checkout —
+> that is the case on this machine, so the desktop / headless / web rows get the
+> button too; any of them updates the same checkout). Plain npm-installed
+> runtimes do not get the button.
 
 > DSH's "Official" group only holds plugins shipped inside DSH itself; third-party
 > plugins always land in "Installed", with no review or store submission.

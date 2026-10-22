@@ -142,7 +142,11 @@ dsh plugin --profile web add github:mutoharohfiqhiabcd-source/dsh-updater
 
 安全兜底：旧目录整目录备份；构建失败自动回滚；目录被别的实例占用时保留暂存更新、
 可点「重试应用」（不用重新下载）；暂存后可随时「取消更新」。
-更新机制只针对**源码检出**，npm 全局 / profile 运行时不在范围内。
+
+> 哪些行会出现「更新」按钮：**源码检出**，以及运行时实际指向源码检出的
+> **运行时 profile**（`~/.dsh/profiles/node_modules/@deepseek-ai/dsh` 是 junction
+> 指到检出里的情况，本机就是这样，所以 desktop / headless / web 三行也会有按钮，
+> 点哪一行都是更新同一个源码检出）。纯 npm 安装的运行时没有这个按钮。
 
 > 说明：DSH 的「官方」分组只放随 DSH 发行版自带的插件；第三方插件一律出现在
 > 「已安装」分组，无需审核、无需上架。

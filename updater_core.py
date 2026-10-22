@@ -1054,6 +1054,35 @@ def find_profiles() -> list:
     return found
 
 
+def resolve_runtime_source_root(profile_dir: Path) -> Path | None:
+    """运行时 profile 的 dsh 运行时若其实指向一个源码检出，返回检出根目录。
+
+    典型情况：`~/.dsh/profiles/node_modules/@deepseek-ai/dsh` 是指向
+    `<checkout>/apps/cli` 的 junction（本机就是这样）。此时「更新这个 profile」
+    与「更新那个源码检出」是同一件事，插件可以把更新按钮指向检出根目录。
+    纯 npm 安装（不在源码检出里）的运行时返回 None，这类运行时不在插件更新范围。
+    """
+    profile_dir = Path(profile_dir)
+    candidates = [
+        profile_dir / "node_modules" / "@deepseek-ai" / "dsh",
+        DSH_HOME / "profiles" / "node_modules" / "@deepseek-ai" / "dsh",
+    ]
+    for cand in candidates:
+        try:
+            if not cand.exists():
+                continue
+            real = Path(os.path.realpath(str(cand)))
+        except Exception:  # noqa: BLE001
+            continue
+        for root in (real, real.parent, real.parent.parent, real.parent.parent.parent):
+            try:
+                if _is_source_checkout(root):
+                    return root
+            except Exception:  # noqa: BLE001
+                pass
+    return None
+
+
 # ---------------------------------------------------------------------------
 # 汇总检测
 # ---------------------------------------------------------------------------
@@ -1101,6 +1130,7 @@ def detect_all(fetch_official: bool = True, fresh: bool = False) -> dict:
                 "kind_label": t("源码检出"),
                 "version": ver,
                 "updateable": True,  # 源码检出支持整目录替换
+                "update_target": str(path),
             }
         )
     # npm 全局
@@ -1112,10 +1142,13 @@ def detect_all(fetch_official: bool = True, fresh: bool = False) -> dict:
                 "kind_label": t("npm 全局"),
                 "version": ver,
                 "updateable": False,  # npm 全局走 npm i -g，另行处理
+                "update_target": "",
             }
         )
     # profile
     for path, kind, ver, cli_ver in find_profiles():
+        # 运行时若指向源码检出（junction），插件里也能直接更新它
+        runtime_root = resolve_runtime_source_root(Path(path))
         result["installs"].append(
             {
                 "path": str(path),
@@ -1124,6 +1157,7 @@ def detect_all(fetch_official: bool = True, fresh: bool = False) -> dict:
                 "version": ver,
                 "cli_version": cli_ver,
                 "updateable": False,
+                "update_target": str(runtime_root) if runtime_root else "",
             }
         )
 
@@ -3367,6 +3401,7 @@ def _cli_detect(offline: bool = False, fresh: bool = False) -> dict:
     for inst in raw.get("installs", []):
         local = str(inst.get("version") or "")
         ref = str(inst.get("ref_version") or "")
+        update_target = str(inst.get("update_target") or "")
         installs.append({
             "path": str(inst.get("path") or ""),
             "kind": str(inst.get("kind") or ""),
@@ -3375,7 +3410,10 @@ def _cli_detect(offline: bool = False, fresh: bool = False) -> dict:
             "ref_kind": str(inst.get("ref_kind") or ""),
             "status": _cli_status_code(local, ref),
             "grade": str(inst.get("grade") or ""),
-            "updateable": bool(inst.get("updateable")),
+            # 插件里的「更新」按钮按这个判断：有可更新的目标目录才显示。
+            # 源码检出 → 自身目录；运行时 profile → 它 junction 指向的源码检出。
+            "updateable": bool(update_target),
+            "update_target": update_target,
         })
     official = raw.get("official")
     github = (official or {}).get("github") or {}

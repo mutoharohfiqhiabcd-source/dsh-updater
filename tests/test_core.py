@@ -1715,3 +1715,59 @@ def test_cli_resume_staged_roundtrip(monkeypatch, tmp_path, capsys):
     assert payload["data"]["watcher_pid"] == 7777
 
 
+# ---------------------------------------------------------------------------
+# 运行时 profile 指向源码检出时，插件里也能直接更新它
+# ---------------------------------------------------------------------------
+def test_resolve_runtime_source_root_follows_junction(monkeypatch, tmp_path):
+    """profile 的 @deepseek-ai/dsh 若是 junction 指向检出 apps/cli，应解析出检出根。"""
+    checkout = make_checkout(tmp_path / "checkout", version="0.2.0")
+    profile = tmp_path / "profile"
+    pkg = profile / "node_modules" / "@deepseek-ai" / "dsh"
+    pkg.mkdir(parents=True)
+    fake_real = checkout / "apps" / "cli"
+    fake_real.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(core.os.path, "realpath", lambda path: str(fake_real))
+    assert core.resolve_runtime_source_root(profile) == checkout
+
+
+def test_resolve_runtime_source_root_returns_none_for_plain_runtime(monkeypatch, tmp_path):
+    """纯 npm 安装的运行时不在源码检出里 → 不给更新按钮。"""
+    profile = tmp_path / "profile"
+    (profile / "node_modules" / "@deepseek-ai" / "dsh").mkdir(parents=True)
+    somewhere = tmp_path / "elsewhere" / "dsh"
+    somewhere.mkdir(parents=True)
+    monkeypatch.setattr(core.os.path, "realpath", lambda path: str(somewhere))
+    assert core.resolve_runtime_source_root(profile) is None
+
+
+def test_cli_detect_exposes_update_target(monkeypatch):
+    checkout = Path("D:/fake/deepseek-harness-master")
+    profile = Path("C:/Users/x/.dsh/profiles/web")
+    monkeypatch.setattr(core, "fetch_official_versions", lambda *a, **k: {})
+    monkeypatch.setattr(core, "find_source_checkouts", lambda: [(checkout, "source", "0.2.0")])
+    monkeypatch.setattr(core, "find_npm_global", lambda: [])
+    monkeypatch.setattr(core, "find_profiles",
+                        lambda: [(profile, "profile", "0.2.0", "0.2.0")])
+    monkeypatch.setattr(core, "resolve_runtime_source_root", lambda path: checkout)
+    data = core._cli_detect(offline=True)
+    by_kind = {row["kind"]: row for row in data["installs"]}
+    assert by_kind["source"]["updateable"] is True
+    assert by_kind["source"]["update_target"] == str(checkout)
+    assert by_kind["profile"]["updateable"] is True, "profile 能指向检出时也应可更新"
+    assert by_kind["profile"]["update_target"] == str(checkout)
+
+
+def test_detect_all_keeps_gui_updateable_semantics(monkeypatch):
+    """detect_all（桌面 GUI 用）的 updateable 语义不能变：profile 仍不是可直接替换的目录。"""
+    checkout = Path("D:/fake/deepseek-harness-master")
+    profile = Path("C:/x/.dsh/profiles/web")
+    monkeypatch.setattr(core, "find_source_checkouts", lambda: [])
+    monkeypatch.setattr(core, "find_npm_global", lambda: [])
+    monkeypatch.setattr(core, "find_profiles",
+                        lambda: [(profile, "profile", "0.2.0", "0.2.0")])
+    monkeypatch.setattr(core, "resolve_runtime_source_root", lambda path: checkout)
+    data = core.detect_all(fetch_official=False)
+    assert data["installs"][0]["update_target"] == str(checkout)
+    assert data["installs"][0]["updateable"] is False
+
+
