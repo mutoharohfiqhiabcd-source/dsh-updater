@@ -170,10 +170,11 @@ new source (keeps `node_modules`/`.git`) → optional install/build → **restar
 the page polls until DSH is back and **reloads itself**.
 
 > Without auto-close you are asked to close DSH manually; the watcher then swaps,
-> rebuilds and restarts. A download that takes more than 15 minutes fails with a
-> clear timeout error instead of hanging forever. Safety: full backup, rollback on
-> build failure, retry button when another process still occupies the folder (no
-> re-download), and a cancel button while staging.
+> rebuilds and restarts. On a very slow network a download may run for up to
+> **10 hours** (the progress bar keeps showing progress / ETA), and you can cancel
+> at any time. Safety: full backup, rollback on build failure, retry button when
+> another process still occupies the folder (no re-download), and a cancel button
+> while staging.
 
 > Which rows get the **Update** button: **source checkouts**, and **runtime
 > profiles whose runtime actually is a source checkout** (when

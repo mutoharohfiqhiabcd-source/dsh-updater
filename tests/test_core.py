@@ -1895,3 +1895,20 @@ def test_update_progress_cli_roundtrip(monkeypatch, capsys):
     assert payload["data"]["percent"] == 42
 
 
+def test_stage_download_cap_is_10_hours(monkeypatch, tmp_path):
+    """慢网络保护：下载总时长上限 10 小时（36000 秒），而不是 15 分钟。"""
+    target = _make_checkout_dir(tmp_path / "dsh", "0.1.0")
+    seen = {}
+
+    def capture(url, dest, log=print, timeout=120.0, progress_cb=None,
+                detail_cb=None, max_total=None):
+        seen["max_total"] = max_total
+        raise RuntimeError("stop here")
+
+    monkeypatch.setattr(core, "download_file", capture)
+    with pytest.raises(RuntimeError):
+        core.stage_source_update(target, port=3999)
+    assert seen["max_total"] == 36000.0, "慢网络允许磨 10 小时，不能被 15 分钟上限掐断"
+    assert core._UPDATE_STAGE_DOWNLOAD_TIMEOUT == 36000.0
+
+

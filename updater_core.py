@@ -2353,7 +2353,7 @@ PENDING_SCHEMA = 1
 DEFAULT_WEB_PORT = 3080
 _UPDATE_WAIT_TIMEOUT = 1800.0     # 等待 DSH 关闭的最长时间（30 分钟）
 _UPDATE_SWAP_RETRY = 120.0        # 目录仍被占用时的重试窗口（秒）
-_UPDATE_STAGE_DOWNLOAD_TIMEOUT = 900.0   # 单次下载总时长上限（15 分钟），防网络卡死
+_UPDATE_STAGE_DOWNLOAD_TIMEOUT = 36000.0  # 单次下载总时长上限（10 小时），照顾慢网络；随时可取消
 
 _UPDATE_WATCHER_TEMPLATE = '''# -*- coding: utf-8 -*-
 """dsh-updater 后台看护进程（由插件在暂存更新时自动生成）。

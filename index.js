@@ -585,7 +585,7 @@ function createApiHandler(options) {
           }
           const envelope = await runCore(options,
             ['update-source', target, '--port', String(port), ...flags],
-            undefined, 30 * 60_000)
+            undefined, 600 * 60_000)
           sendJson(res, envelope.ok ? 200 : 502, envelope.ok
             ? { ok: true, data: { ...envelope.data, inUse: false, restart: false },
               log: envelope.log }
