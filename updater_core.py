@@ -17,6 +17,7 @@ import base64
 import copy
 import datetime
 import json
+import locale
 import os
 import re
 import shutil
@@ -1112,6 +1113,32 @@ def _dedupe_installs(installs: list) -> dict:
     return {"installs": list(seen.values()), "removed": removed}
 
 
+def _best_known_ref(off: dict, ref_kind: str) -> str:
+    """官方版本抓取失败时，从缓存的 tags / versions 里挑一个最新版本当参照。
+
+    2026-10-27 的实测：GitHub 与 npm 全部不可达时，`official` 里 version 为空，
+    界面所有行都变成「未检测」、连「更新」按钮都不出现，用户完全没法继续更新。
+    缓存里的 tags/versions 清单通常是上一次成功抓取留下的，拿来当 best-effort
+    参照足够让界面继续可用（可能略旧，但不会把入口锁死）。
+    """
+    section_key = "github" if ref_kind == "github" else "npm"
+    section = (off or {}).get(section_key) if isinstance(off, dict) else None
+    if not isinstance(section, dict):
+        return ""
+    direct = str(section.get("version") or "").strip()
+    if direct:
+        return direct
+    pool = section.get("tags") if ref_kind == "github" else section.get("versions")
+    best = ""
+    for candidate in pool or []:
+        candidate = str(candidate or "").strip()
+        if not candidate:
+            continue
+        if not best or compare_versions(candidate, best) > 0:
+            best = candidate
+    return best
+
+
 def detect_all(fetch_official: bool = True, fresh: bool = False) -> dict:
     """检测本机所有 DSH 安装并拉取官方版本。返回 dict。
 
@@ -1176,15 +1203,20 @@ def detect_all(fetch_official: bool = True, fresh: bool = False) -> dict:
     off = result["official"] or {}
     official_gh = (off.get("github") or {}).get("version") or ""
     official_npm = (off.get("npm") or {}).get("version") or ""
+    # 官方查询失败时退回缓存里的 tags/versions（best-effort），别让界面卡在「未检测」
+    fallback_gh = "" if official_gh else _best_known_ref(off, "github")
+    fallback_npm = "" if official_npm else _best_known_ref(off, "npm")
     for inst in result["installs"]:
         local = inst["version"] or ""
         if not local:
             inst["status"] = t("无法读取版本")
         elif inst["kind"] == INSTALL_KIND_SOURCE:
-            ref, ref_ok = official_gh, bool(official_gh)
+            ref = official_gh or fallback_gh
+            ref_ok = bool(ref)
             ref_kind = "github"
         else:
-            ref, ref_ok = official_npm, bool(official_npm)
+            ref = official_npm or fallback_npm
+            ref_ok = bool(ref)
             ref_kind = "npm"
         inst["ref_version"] = ref or ""
         inst["ref_kind"] = ref_kind
@@ -1926,7 +1958,8 @@ def _run_pnpm_step(target_dir: Path, args: list, log, what: str) -> None:
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
-        encoding="utf-8",
+        # pnpm 在中文 Windows 上按控制台代码页输出（GBK），固定 utf-8 会乱码/解析失败
+        encoding=(locale.getpreferredencoding(False) or "utf-8"),
         errors="replace",
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
@@ -1944,6 +1977,58 @@ def _run_pnpm_step(target_dir: Path, args: list, log, what: str) -> None:
 # ---------------------------------------------------------------------------
 # 关闭正在运行的 DSH（更新前自动处理）
 # ---------------------------------------------------------------------------
+def _decode_console_output(raw) -> str:
+    """按 Windows 控制台代码页解码子进程输出。
+
+    坑：核心进程是 `python -X utf8` 启动的，子进程输出默认按 UTF-8 解码；而
+    netstat / tasklist / taskkill 在中文 Windows 上输出 GBK，`text=True` 会在
+    Python 的 reader 线程里抛 UnicodeDecodeError（输出直接变空）——2026-10-25
+    的「自动关闭 DSH 找不到进程」就是这个原因。所以统一先收字节再这里解码。
+    """
+    if raw is None:
+        return ""
+    if isinstance(raw, str):
+        return raw
+    candidates = []
+    if os.name == "nt":
+        # 控制台命令（netstat/tasklist/taskkill）按 ANSI/OEM 代码页输出；mbcs 在
+        # 中文 Windows 上就是 cp936。必须放在 utf-8 前面，否则 errors="replace"
+        # 会把中文整段替换成 U+FFFD（虽然 ASCII 部分仍能解析，但日志不可读）。
+        candidates.append("mbcs")
+        try:
+            candidates.append(locale.getpreferredencoding(False) or "")
+        except Exception:  # noqa: BLE001
+            pass
+    else:
+        try:
+            candidates.append(locale.getpreferredencoding(False) or "")
+        except Exception:  # noqa: BLE001
+            pass
+    candidates.append("utf-8")
+    for enc in candidates:
+        if not enc:
+            continue
+        try:
+            return raw.decode(enc, errors="replace")
+        except Exception:  # noqa: BLE001
+            continue
+    return raw.decode("utf-8", errors="replace")
+
+
+def _run_console(args: list, timeout: float = 30.0, **kwargs) -> tuple:
+    """跑控制台命令，返回 (returncode, stdout_text, stderr_text)。
+
+    输出按字节收回来再解码（见 `_decode_console_output`），避免 GBK 输出在
+    `-X utf8` 下解码失败；其它 kwargs 原样传给 subprocess.run。
+    """
+    for key in ("text", "encoding", "errors"):
+        kwargs.pop(key, None)
+    result = subprocess.run(args, capture_output=True, timeout=timeout, **kwargs)
+    return (result.returncode,
+            _decode_console_output(result.stdout),
+            _decode_console_output(result.stderr))
+
+
 def processes_on_port(port: int = 3080) -> list:
     """返回监听指定端口的进程 [{"pid": int, "name": str}]。
 
@@ -1953,18 +2038,17 @@ def processes_on_port(port: int = 3080) -> list:
     pids: list = []
     try:
         if os.name == "nt":
-            r = subprocess.run(["netstat", "-ano"], capture_output=True, text=True,
-                               timeout=20,
-                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-            for line in (r.stdout or "").splitlines():
+            _code, text, _err = _run_console(
+                ["netstat", "-ano"], timeout=20,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            for line in text.splitlines():
                 parts = line.split()
                 if len(parts) >= 4 and f":{port}" in parts[1] and parts[3].upper() == "LISTENING":
                     if parts[-1].isdigit():
                         pids.append(int(parts[-1]))
         else:
-            r = subprocess.run(["lsof", "-t", f"-i:{port}"], capture_output=True,
-                               text=True, timeout=20)
-            for line in (r.stdout or "").splitlines():
+            _code, text, _err = _run_console(["lsof", "-t", f"-i:{port}"], timeout=20)
+            for line in text.splitlines():
                 if line.strip().isdigit():
                     pids.append(int(line.strip()))
     except Exception:  # noqa: BLE001
@@ -1975,16 +2059,16 @@ def processes_on_port(port: int = 3080) -> list:
         name = ""
         try:
             if os.name == "nt":
-                r = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"],
-                                   capture_output=True, text=True, timeout=15,
-                                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-                first = (r.stdout or "").strip().splitlines()
+                _code, text, _err = _run_console(
+                    ["tasklist", "/FI", f"PID eq {pid}", "/NH"], timeout=15,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                first = text.strip().splitlines()
                 if first:
                     name = first[0].split()[0]
             else:
-                r = subprocess.run(["ps", "-p", str(pid), "-o", "comm="],
-                                   capture_output=True, text=True, timeout=15)
-                name = (r.stdout or "").strip()
+                _code, text, _err = _run_console(
+                    ["ps", "-p", str(pid), "-o", "comm="], timeout=15)
+                name = text.strip()
         except Exception:  # noqa: BLE001
             pass
         out.append({"pid": pid, "name": name or "?"})
@@ -2007,17 +2091,16 @@ def close_dsh(port: int = 3080, log=print) -> dict:
         pid = p["pid"]
         try:
             if os.name == "nt":
-                r = subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
-                                   capture_output=True, text=True, timeout=30,
-                                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                code, text, err = _run_console(
+                    ["taskkill", "/PID", str(pid), "/T", "/F"], timeout=30,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             else:
-                r = subprocess.run(["kill", "-9", str(pid)], capture_output=True,
-                                   text=True, timeout=30)
-            if r.returncode == 0:
+                code, text, err = _run_console(["kill", "-9", str(pid)], timeout=30)
+            if code == 0:
                 closed.append(p)
                 log(t("已关闭进程 {p1}（{p2}）。", p1=pid, p2=p["name"]))
             else:
-                msg = (r.stderr or r.stdout or "").strip()[:120]
+                msg = (err or text or "").strip()[:120]
                 errors.append({"pid": pid, "error": msg or "taskkill 返回非 0"})
                 log(t("无法关闭进程 {p1}：{p2}", p1=pid, p2=msg or "taskkill 返回非 0"))
         except Exception as e:  # noqa: BLE001
@@ -3028,6 +3111,19 @@ def pending_update_status() -> dict:
     log_file = Path(str(manifest.get("log_file") or update_watcher_log_file()))
     staging = Path(str(manifest.get("staging") or "")) if manifest.get("staging") else None
     status = str(manifest.get("status") or "")
+    if status in ("expired", "canceled"):
+        # 过期/已取消的旧任务不该继续占着界面：否则红条一直挂着（expired 没有可点的
+        # 按钮），用户会以为「更新失败后无法继续更新」。顺手清掉清单，下次从干净状态开始。
+        try:
+            pending_update_file().unlink()
+        except Exception:  # noqa: BLE001
+            pass
+        return {
+            "present": False,
+            "status": status,
+            "old_version": str(manifest.get("old_version") or ""),
+            "new_version": str(manifest.get("new_version") or ""),
+        }
     tail = []
     try:
         lines = log_file.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -3167,18 +3263,17 @@ def running_node_count() -> int:
     """
     if os.name != "nt":
         try:
-            r = subprocess.run(["pgrep", "-c", "node"], capture_output=True,
-                               text=True, timeout=10)
-            return int((r.stdout or "0").strip() or 0) if r.returncode == 0 else 0
+            code, text, _err = _run_console(["pgrep", "-c", "node"], timeout=10)
+            return int(text.strip() or 0) if code == 0 else 0
         except Exception:  # noqa: BLE001
             return 0
     try:
-        r = subprocess.run(["tasklist", "/FI", "IMAGENAME eq node.exe", "/NH"],
-                           capture_output=True, text=True, timeout=15,
-                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        if r.returncode != 0:
+        code, text, _err = _run_console(
+            ["tasklist", "/FI", "IMAGENAME eq node.exe", "/NH"], timeout=15,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        if code != 0:
             return 0
-        return sum(1 for ln in (r.stdout or "").splitlines() if "node.exe" in ln.lower())
+        return sum(1 for ln in text.splitlines() if "node.exe" in ln.lower())
     except Exception:  # noqa: BLE001
         return 0
 

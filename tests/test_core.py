@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import zipfile
 from pathlib import Path
@@ -1712,8 +1713,10 @@ def test_status_can_retry_false_after_cancel(monkeypatch, tmp_path):
     monkeypatch.setattr(core.os, "kill", lambda pid, sig: None)
     core.cancel_pending_update()
     status = core.pending_update_status()
+    # 取消后的旧任务不再占住界面（红条会消失），清单也会被清掉
+    assert status["present"] is False
     assert status["status"] == "canceled"
-    assert status["can_retry"] is False
+    assert not core.pending_update_file().exists()
 
 
 def test_cli_resume_staged_roundtrip(monkeypatch, tmp_path, capsys):
@@ -1910,5 +1913,135 @@ def test_stage_download_cap_is_10_hours(monkeypatch, tmp_path):
         core.stage_source_update(target, port=3999)
     assert seen["max_total"] == 36000.0, "慢网络允许磨 10 小时，不能被 15 分钟上限掐断"
     assert core._UPDATE_STAGE_DOWNLOAD_TIMEOUT == 36000.0
+
+
+# ---------------------------------------------------------------------------
+# 中文 Windows 控制台输出解码（自动关 DSH 曾因 netstat GBK 解码失败找不到进程）
+# ---------------------------------------------------------------------------
+class _FakeCompleted:
+    def __init__(self, returncode=0, stdout=b"", stderr=b""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def _gbk_netstat(port_line: str = "0.0.0.0:3080") -> bytes:
+    text = (
+        "活动连接\r\n\r\n  协议  本地地址          外部地址        状态           PID\r\n"
+        f"  TCP    {port_line}    0.0.0.0:0    LISTENING       22040\r\n"
+        "  TCP    0.0.0.0:3080    1.2.3.4:5555   ESTABLISHED     22040\r\n"
+    )
+    return text.encode("gbk")
+
+
+def _gbk_tasklist(name: str = "微信.exe", pid: int = 22040) -> bytes:
+    # tasklist /NH 不带表头，只有数据行；用中文进程名验证 mbcs 解码
+    text = f"{name:<28} {pid} Console                    1     123,456 K\r\n"
+    return text.encode("gbk")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="中文 Windows 控制台代码页专用")
+def test_decode_console_output_handles_gbk_bytes():
+    text = core._decode_console_output(_gbk_netstat())
+    assert "22040" in text and "LISTENING" in text
+    assert "\ufffd" not in text, "netstat 的 GBK 输出要按控制台代码页解码，不能整段乱码"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="netstat/tasklist 专用")
+def test_processes_on_port_parses_localized_netstat_output(monkeypatch):
+    def fake_run(args, **kwargs):
+        if args[0] == "netstat":
+            return _FakeCompleted(0, _gbk_netstat())
+        if args[0] == "tasklist":
+            return _FakeCompleted(0, _gbk_tasklist())
+        return _FakeCompleted(0, b"")
+
+    monkeypatch.setattr(core.subprocess, "run", fake_run)
+    assert core.processes_on_port(3080) == [{"pid": 22040, "name": "微信.exe"}]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="netstat/tasklist 专用")
+def test_auto_close_dsh_finds_dsh_through_localized_netstat(monkeypatch):
+    """2026-10-25 的现场回归：中文 netstat 输出必须能找到 DSH 并结束它。"""
+
+    def fake_run(args, **kwargs):
+        if args[0] == "netstat":
+            return _FakeCompleted(0, _gbk_netstat())
+        if args[0] == "tasklist":
+            return _FakeCompleted(0, _gbk_tasklist())
+        return _FakeCompleted(0, b"")
+
+    monkeypatch.setattr(core.subprocess, "run", fake_run)
+    killed = []
+    monkeypatch.setattr(core.os, "kill", lambda pid, sig: killed.append(pid))
+    monkeypatch.setattr(core, "_is_port_open", lambda *a, **k: False)
+    assert core._auto_close_dsh(3080, lambda *_: None) is True
+    assert killed == [22040]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="taskkill 专用")
+def test_close_dsh_survives_localized_taskkill_output(monkeypatch):
+    monkeypatch.setattr(core, "processes_on_port",
+                        lambda port: [{"pid": 22040, "name": "node.exe"}])
+    taskkill = "成功: 已终止 PID 为 22040 的进程。\r\n".encode("gbk")
+    monkeypatch.setattr(core.subprocess, "run",
+                        lambda args, **kw: _FakeCompleted(0, taskkill))
+    monkeypatch.setattr(core, "_is_port_open", lambda *a, **k: False)
+    result = core.close_dsh(3080, log=lambda *_: None)
+    assert result["ok"] is True
+    assert result["closed"][0]["pid"] == 22040
+
+
+# ---------------------------------------------------------------------------
+# 官方版本查询失败时的兜底参照（否则界面全「未检测」、没有更新按钮）
+# ---------------------------------------------------------------------------
+def test_best_known_ref_uses_cached_tags_and_versions():
+    official = core._empty_official()
+    official["github"]["ok"] = False
+    official["github"]["version"] = None
+    official["github"]["tags"] = ["0.2.1-rc.2", "0.2.1-rc.3", "0.2.0-rc.2"]
+    official["npm"]["ok"] = False
+    official["npm"]["version"] = None
+    official["npm"]["versions"] = ["0.2.1-rc.2", "0.2.1-rc.4"]
+    assert core._best_known_ref(official, "github") == "0.2.1-rc.3"
+    assert core._best_known_ref(official, "npm") == "0.2.1-rc.4"
+    assert core._best_known_ref({}, "npm") == ""
+    assert core._best_known_ref(None, "github") == ""
+
+
+def test_detect_all_falls_back_to_cached_refs_when_network_fails(monkeypatch, tmp_path):
+    checkout = _make_checkout_dir(tmp_path / "checkout", "0.2.1-rc.3")
+    profile = tmp_path / "profiles" / "web"
+    profile.mkdir(parents=True)
+    official = core._empty_official()
+    official["github"]["ok"] = False
+    official["github"]["tags"] = ["0.2.1-rc.3"]
+    official["npm"]["ok"] = False
+    official["npm"]["versions"] = ["0.2.1-rc.3", "0.2.1-rc.4"]
+    monkeypatch.setattr(core, "fetch_official_versions", lambda *a, **k: official)
+    monkeypatch.setattr(core, "find_source_checkouts",
+                        lambda: [(checkout, "source", "0.2.1-rc.3")])
+    monkeypatch.setattr(core, "find_npm_global", lambda: [])
+    monkeypatch.setattr(core, "find_profiles",
+                        lambda: [(profile, "profile", "0.2.1-rc.3", "0.2.1-rc.3")])
+    monkeypatch.setattr(core, "resolve_runtime_source_root", lambda p: checkout)
+    data = core.detect_all(fetch_official=True)
+    source = [i for i in data["installs"] if i["kind"] == "source"][0]
+    prof = [i for i in data["installs"] if i["kind"] == "profile"][0]
+    assert source["ref_version"] == "0.2.1-rc.3"
+    assert prof["ref_version"] == "0.2.1-rc.4", "npm 查询失败时用缓存版本清单兜底"
+    assert core._cli_status_code(prof["version"], prof["ref_version"]) == "update-available"
+
+
+# ---------------------------------------------------------------------------
+# 过期/已取消的待应用状态不再占住界面
+# ---------------------------------------------------------------------------
+def test_expired_pending_status_is_hidden_and_manifest_cleared(monkeypatch, tmp_path):
+    _target, _staged = _stage_fake_update(monkeypatch, tmp_path)
+    core._set_pending_status("expired", error="等待 DSH 关闭超时", finished=core._now_stamp())
+    status = core.pending_update_status()
+    assert status["present"] is False, "过期任务应隐藏，否则红条一直挂着、看起来像不能再更新"
+    assert status["status"] == "expired"
+    assert not core.pending_update_file().exists(), "过期状态顺手清掉清单"
 
 
